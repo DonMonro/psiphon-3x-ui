@@ -1,361 +1,295 @@
-# Psiphon for 3X-UI
+# Psiphon-3X-UI
 
-> A companion panel that installs [Psiphon](https://github.com/Psiphon-Labs/psiphon-tunnel-core)
-> alongside [Sanaei's 3x-ui](https://github.com/MHSanaei/3x-ui) on an Ubuntu
-> server, exposing per-country outbound traffic through clones of an existing
-> 3x-ui inbound.
+> Per-country egress for [3x-ui](https://github.com/MHSanaei/3x-ui), powered by
+> [Psiphon](https://github.com/Psiphon-Labs/psiphon-tunnel-core).
 
-[![CI](https://github.com/DonMonro/psiphon-3x-ui/actions/workflows/ci.yml/badge.svg)](https://github.com/DonMonro/psiphon-3x-ui/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Tests: 240 passing](https://img.shields.io/badge/tests-240%20passing-brightgreen)](#tests)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](#tests)
+Psiphon-3X-UI installs alongside an existing 3x-ui panel on an Ubuntu server and
+gives each country you select its own internet exit. It runs one
+`psiphon-tunnel-core` process per country, clones one 3x-ui inbound per country,
+and writes the Xray routing that binds them together — so traffic arriving on a
+country's inbound egresses in that country.
+
+One install command, one web panel, no manual Xray editing.
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](#development)
+[![Platform: Ubuntu 20.04+](https://img.shields.io/badge/platform-Ubuntu%2020.04%2B-e95420)](#requirements)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688)](https://fastapi.tiangolo.com/)
 
 ---
 
-## What it does
+## How it works
 
-1. A single one-line command installs the Psiphon Go binary and a small management panel.
-2. On first login, a **setup wizard** walks the user through:
-   - Choosing which Psiphon countries to enable (all, or a specific subset).
-   - Specifying an internal SOCKS port range and a public inbound port range (or accepting smart recommendations).
-   - One Psiphon tunnel instance is spawned per selected country, each tagged with `EgressRegion` and exposing a local `127.0.0.1:<port>` SOCKS5 proxy.
-   - Detecting the installed 3x-ui panel and asking for its API credentials.
-   - Reading the existing inbounds and letting the user pick one to use as a clone template.
-3. The wizard clones that inbound **once per country**, wiring each clone's outbound to the matching local SOCKS port, and names it `[ 🇺🇸 United States ] :<port>`.
-4. From the second login onward the wizard is replaced by a compact **management dashboard** where the user can add, remove, or modify countries and ports, tail logs, take backups, rotate the password, and change the panel port.
+```
+client ──► 3x-ui inbound clone [🇺🇸 US]:<public_port> ──► local SOCKS5
+             │  Xray routing rule                              │
+             │  (inboundTag → outboundTag=psiphon-out-US)       ▼
+             └── Xray socks outbound 127.0.0.1:<socks_port>   psiphon-tunnel-core
+                   (top-level outbounds[])                  (EgressRegion=US) ──► internet (US exit)
+```
+
+Enabling a country creates three things, and the panel keeps all three in sync:
+
+| Layer | Artifact |
+| ----- | -------- |
+| Psiphon | systemd unit `psiphon-tunnel@<CC>.service`, tunnel-core with `EgressRegion=<CC>`, listening as SOCKS5 on `127.0.0.1:<socks_port>` |
+| 3x-ui | a clone of an inbound you choose, on `<public_port>`, remarked `[ 🇺🇸 United States ] :<public_port>` |
+| Xray | a `socks` outbound tagged `psiphon-out-<CC>` plus a `routing.rules[]` entry binding the cloned inbound to it |
+
+A SQLite database (`panel.db`) is the source of truth mapping country ↔ port pair
+↔ cloned inbound id. 33 Psiphon egress regions ship in
+[`panel/data/countries.yaml`](panel/data/countries.yaml) and the list is editable
+without code changes.
 
 ---
 
-## Install (Ubuntu 20.04+ / 22.04+) — copy-paste one-liner
+## Requirements
 
-> You must already have Sanaei's `3x-ui` installed on the same server if you want
-> the inbound-cloning integration. The panel itself can also run standalone
-> (exposing only local SOCKS proxies) if `3x-ui` is absent.
+- Ubuntu 20.04+ or 22.04+, x86-64, root access
+- Python 3.10+ (3.11 recommended)
+- [3x-ui](https://github.com/MHSanaei/3x-ui) installed on the **same host** —
+  optional, but required for inbound cloning. Without it the panel still manages
+  Psiphon tunnels and exposes local SOCKS5 proxies.
+- Outbound internet access. The installer installs a Go toolchain and builds
+  `psiphon-tunnel-core` from source (upstream publishes no `linux_amd64` binary;
+  nothing is redistributed here).
+
+---
+
+## Install
 
 ```bash
 sudo bash <(curl -sL https://raw.githubusercontent.com/DonMonro/psiphon-3x-ui/main/install.sh) \
   || sudo bash <(wget -qO- https://raw.githubusercontent.com/DonMonro/psiphon-3x-ui/main/install.sh)
 ```
 
-> The one-liner tracks `main`, so a plain `git push` is all it takes to ship a
-> change — re-run the installer and the new code is installed. No tag or
-> release needed. (`PSIPHON3XUI_REPO_REF=<branch>` can override the cloned
-> ref for testing.)
->
-> If `raw.githubusercontent.com` rate-limits you (bash errors like
-> `429:: command not found`), clone instead — same code, no raw-file CDN:
->
-> ```bash
-> rm -rf /tmp/p3x && git clone --depth 1 https://github.com/DonMonro/psiphon-3x-ui.git /tmp/p3x \
->   && sudo bash /tmp/p3x/install.sh
-> ```
-
-The installer will:
-- Install system dependencies (Python venv, `git`, `golang-go`, `jq`, `curl`, …). The installer does **not** manage a host firewall.
-- Build `psiphon-tunnel-core` from the pinned upstream tag (per Psiphon Labs' license — never redistributed).
-- Prompt for a **panel port** and **admin username/password** (each manually enterable or randomly generated by pressing Enter).
-- Register the panel as a `systemd` service (`psiphon-3x-ui.service`) and start it.
-
-### HTTPS (currently not prompted for)
-
-The self-signed HTTPS install prompt has been removed — the panel binds plain
-HTTP by default. For real TLS, front the panel with
-[Caddy](https://caddyserver.com/) (recommended): bind Caddy to 443 and
-reverse-proxy to the panel's HTTP port, and Caddy handles the Let's Encrypt
-cert for you. The `PSIPHON3XUI_TLS_CERT` / `PSIPHON3XUI_TLS_KEY` /
-`PSIPHON3XUI_HTTPS_ONLY` env vars remain accepted by the panel, so a future
-"enable HTTPS" flow can re-enable panel-terminated TLS by hand-editing
-`/opt/psiphon-3x-ui/panel.env` and restarting the service.
-
-### Installer summary
-
-At the end the installer prints (and logs to `/opt/psiphon-3x-ui/install.log`):
-
-```
-── Psiphon-3X-UI installed ─────────────────────────────────
- Web UI : http://<SERVER_IP>:<PORT>
- User   : <USER>
- Pass   : <PASS>      (shown once — copy it now)
- HTTPS  : no          (front with Caddy for real TLS)
- Log    : /opt/psiphon-3x-ui/install.log
-──────────────────────────────────────────────────────────
-```
-
-### Re-running the installer / upgrading
-
-`install.sh` is **idempotent**: re-running upgrades the panel wheel in place,
-re-seeds creds, and restarts the service. Session cookies stay valid
-(session_secret preserved from the existing `panel.env`). Use `--uninstall`
-to stop and remove the install:
+If `raw.githubusercontent.com` rate-limits you (bash reports errors like
+`429:: command not found`), clone instead — same code, no CDN:
 
 ```bash
-# The curl-into-bash form works on every box, including ones where the
-# operator never downloaded install.sh to disk (the canonical Psiphon-3X-UI
-# install route is `bash <(curl -sL …install.sh)`). Pass `--uninstall` as
-# the first arg to the resulting shell:
-sudo bash <(curl -sL https://raw.githubusercontent.com/DonMonro/psiphon-3x-ui/main/install.sh) --uninstall
-# → Type "yes" to confirm: the panel service + /opt/psiphon-3x-ui are removed.
-#   3x-ui's own inbounds installed through it are NOT touched — you must
-#   delete them from 3x-ui manually.
-
-# Operators who DID clone the repo to disk can instead run the local file:
-#   sudo bash install.sh --uninstall
+rm -rf /tmp/p3x && git clone --depth 1 https://github.com/DonMonro/psiphon-3x-ui.git /tmp/p3x && sudo bash /tmp/p3x/install.sh
 ```
 
-Open the URL in a browser and log in to begin the first-run setup wizard.
+The installer:
 
-> ### ℹ️ Psiphon-Inc upstream credentials — baked in (Phase 24)
->
-> The four Psiphon-Inc upstream credentials the per-country psiphon-tunnel-core
-> units authenticate upstream with (`PropagationChannelId`, `SponsorId`,
-> `RemoteServerListUrl`, `RemoteServerListSignaturePublicKey`) — plus the
-> three modern additional fields `ServerEntrySignaturePublicKey`,
-> `ExchangeObfuscationKey`, `ObfuscatedServerListRootURLs` — are the
-> **universal public-bootstrap values** Psiphon Inc. ships inside every
-> public Psiphon-3 client binary (Play-Store APK, GitHub release binaries).
-> They are NOT commercial secrets. **Phase 24 bakes them into
-> [`panel/psiphon/__init__.py`](panel/psiphon/__init__.py) as `_PUBLIC_*`
-> module constants**; per-country tunnels establish out-of-the-box with
-> **no env vars required** — no installer prompt, no manual setup.
->
-> **Optional overrides for commercial sponsors only**: if you have a
-> licensing/sponsor relationship with Psiphon Inc. and your sponsor values
-> differ from the public-bootstrap defaults (your own PropChannel / SponsorId
-> / signed server-list URL / RSA-2048 sig-pubkey), edit
-> `/opt/psiphon-3x-ui/panel.env` by hand AFTER install and restart the panel:
->
-> ```bash
-> sudo vi /opt/psiphon-3x-ui/panel.env
-> #   PSIPHON_PROPAGATION_CHANNEL_ID="<your 32-hex value>"
-> #   PSIPHON_SPONSOR_ID="<your 16-hex value>"
-> #   PSIPHON_REMOTE_SERVER_LIST_URL="<https://…>"
-> #   PSIPHON_REMOTE_SERVER_LIST_SIGNATURE_PUBLIC_KEY="<base64 RSA-2048 SPKI>"
-> sudo systemctl restart psiphon-3x-ui
-> ```
->
-> The panel still fast-fails with `PsiphonCredentialError` if your override
-> value looks like a known placeholder (all-`F`'s / all-`0`'s / `"..."` stub /
-> non-base64 sig-pubkey / non-`http(s)://` URL) — so you won't accidentally
-> boot a binary that 5-minute-deathloops. The default code path (no env vars
-> set) never raises — the baked-in `_PUBLIC_*` constants are pre-validated.
-> Full override-format details + the placebo-rejector rules are in
-> [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md#psiphon-inc-upstream-credentials--optional-overrides-phase-24).
+1. Installs system dependencies (`python3-venv`, `git`, `golang-go`, `jq`, `curl`, …).
+2. Builds `psiphon-tunnel-core` from the pinned upstream tag (`v2.0.39`).
+3. Creates the unprivileged `psiphon3xui` user and the `/opt/psiphon-3x-ui` prefix.
+4. Prompts for a panel port and admin username/password — type your own, or press
+   Enter for a generated value.
+5. Registers and starts `psiphon-3x-ui.service`, then prints the URL and
+   credentials (also logged to `/opt/psiphon-3x-ui/install.log`).
+
+It does **not** manage a host firewall — open the panel port and your public
+inbound ports yourself.
+
+### Upgrading
+
+`install.sh` is idempotent: re-running upgrades the panel in place and preserves
+`panel.db` and the session secret, so existing sessions and countries survive.
+The installer tracks the `main` branch — push a commit, re-run the installer, and
+the change is live. No tag or release step. Override the ref with
+`PSIPHON3XUI_REPO_REF=<branch>` for testing.
+
+### Uninstall
+
+```bash
+sudo bash <(curl -sL https://raw.githubusercontent.com/DonMonro/psiphon-3x-ui/main/install.sh) --uninstall
+```
+
+Type `yes` to confirm. This removes the panel service, the install prefix, and —
+in 3x-ui — **only** the inbounds, outbounds, and routing rules this panel
+created. Inbounds and outbounds you made yourself are never touched.
 
 ---
 
-## First-run setup
+## First run
 
-After login you're dropped into a 7-step wizard:
+Log in at `http://<SERVER_IP>:<PORT>` to enter a seven-step wizard:
 
-1. **Countries** — pick one-per-country or all-of-them mode.
-2. **Port ranges** — eyeball the smart recommendation or override with explicit ranges (we detect already-listening TCP ports and refuse collisions with the panel port).
-3. **Apply** — a server-sent-events stream mints one tunnel per country (writes the config, starts the systemd unit, probes SOCKS5). Progress bar live.
-4. **3x-ui detect** — auto-probe `127.0.0.1:2053+` for Sanaei's panel; if found, advance with one click. Manual paste also supported.
-5. **3x-ui credentials** — verify a real login against the 3x-ui panel API. The password is encrypted at rest (itsdangerous signer with the panel session secret).
-6. **Inbound template** — list all 3x-ui inbounds and pick one to clone from. We capture the template identity (id + protocol) into the wizard's state.
-7. **Clone** — one SSE record per country: clone the template inbound, set `socks://127.0.0.1:<socks_port>` as its outbound, remark as `[ 🇺🇸 United States ] :<public_port>`. Failure in the middle triggers a best-effort rollback of the already-created clones.
+| Step | What happens |
+| ---- | ------------ |
+| 1. Countries | Pick the egress regions to enable. |
+| 2. Ports | Accept the recommended SOCKS and public port ranges, or set your own. Already-listening ports and collisions with the panel port are rejected. |
+| 3. Apply | Server-sent-events stream: write each country's config, start its systemd unit, probe its SOCKS5 listener. |
+| 4. Detect 3x-ui | Auto-probe the local 3x-ui panel, or paste its URL. |
+| 5. Credentials | Verify a real login against the 3x-ui API. The password is encrypted at rest. |
+| 6. Template | List existing inbounds and choose one to clone. |
+| 7. Clone | SSE stream: clone the template once per country and bind the Xray routing. A mid-run failure rolls back the clones already made. |
 
-After the wizard finishes, the dashboard SPA is unlocked at `GET /dashboard`.
-See [`docs/XUI_API.md`](docs/XUI_API.md) for the full wizard REST + SSE shape.
+Finishing the wizard unlocks the management dashboard; the wizard does not
+reappear.
 
 ---
 
 ## Management dashboard
 
-Once the wizard completes, every `GET /api/dashboard/*` endpoint requires a
-signed session cookie. The dashboard SPA is a single self-contained
-`panel/static/dashboard.html` (Alpine.js + Pico.css pulled from CDN; no build
-step). It surfaces all of:
+- **Countries** — enable/disable a tunnel, edit its ports, ping it through its own
+  SOCKS proxy, re-clone its inbound, tail its journal, or delete it.
+- **Re-apply** — rewrite every config, restart every unit, re-clone unhealthy inbounds.
+- **Backup / restore** — download a tar archive of `panel.db` plus every per-country
+  config, and upload one back (zip-slip protected).
+- **Settings** — rotate the admin password (the current one is re-verified first) and
+  change the panel port (collision-checked against tunnel ports).
 
-- **Countries table** — enable/disable a tunnel, edit its ports, tail its logs, delete it (best-effort teardown: stop unit → remove CloneRecord → delete 3x-ui inbound → remove PortAssignment → flip Country.enabled=False).
-- **Re-apply everything** — rewrites configs + restarts units for every PortAssignment row, and re-clones unhealthy CloneRecord rows from the wizard template.
-- **Backup / Restore** — `POST /backup` returns a tar archive with panel.db + every config/<country>.json; `POST /restore` accepts an upload (zip-slip protected) and writes back.
-- **Settings** — rotate admin password (re-verifies the current bcrypt hash before writing the new one), change panel port (rejects collisions with tunnel socks/public ports).
-
-The full request/response shapes + error codes are documented in
-[`docs/XUI_API.md`](docs/XUI_API.md) (look for the "Phase 6 — Management Dashboard
-surface" + "Phase 7 — Hardening" sections).
+The SPA is plain HTML + Alpine.js + Pico.css served as static files — no build step.
 
 ---
 
 ## API surface
 
-| Verb     | Path                                       | Auth | Purpose                                                        |
-| -------- | ------------------------------------------ | ---- | ------------------------------------------------------------- |
-| GET      | `/api/health`                              | —    | liveness probe                                                |
-| GET      | `/api/countries`                           | —    | selectable EgressRegion list (from `panel/data/countries.yaml`)   |
-| POST     | `/auth/login`                              | —    | bcrypt-verify → set signed session + CSRF cookies             |
-| POST     | `/auth/logout`                             | —    | clear session + CSRF cookies                                  |
-| GET      | `/auth/csrf`                               | ✓    | mint / refresh the CSRF cookie + return its token             |
-| GET      | `/api/me`                                 | ✓    | current user + wizard_completed flag                          |
-| GET      | `/api/i18n/{locale}`                       | —    | JSON bundle for a locale (`en` ships in v1; 404 for unknown)  |
-| GET      | `/api/wizard`                              | ✓    | current wizard step + step_data                               |
-| POST     | `/api/wizard/countries`                    | ✓    | step 1                                                        |
-| POST     | `/api/wizard/ports`                        | ✓    | step 2                                                        |
-| POST     | `/api/wizard/apply`                        | ✓    | step 3 (SSE: one record per country)                          |
-| POST     | `/api/wizard/xui-detect`                   | ✓    | step 4                                                        |
-| POST     | `/api/wizard/xui-creds`                    | ✓    | step 5                                                        |
-| GET      | `/api/wizard/inbounds`                     | ✓    | list 3x-ui inbounds using cached creds                        |
-| POST     | `/api/wizard/clone-template`               | ✓    | step 6 — pick the template to clone from                      |
-| POST     | `/api/wizard/clone`                        | ✓    | step 7 (SSE: clone template per country)                      |
-| GET      | `/api/dashboard/countries`                 | ✓    | dashboard: country cards                                      |
-| PATCH    | `/api/dashboard/countries/{code}`           | ✓    | enable/disable a tunnel                                       |
-| DELETE   | `/api/dashboard/countries/{code}`           | ✓    | best-effort teardown                                          |
-| POST     | `/api/dashboard/countries/{code}/_ports`   | ✓    | edit socks/public port, rewrites config + re-clones inbound   |
-| GET      | `/api/dashboard/tunnels/{code}/logs`       | ✓    | journalctl tail                                               |
-| POST     | `/api/dashboard/reapply`                   | ✓    | whole-panel rewrite + restart + re-clone unhealthy            |
-| POST     | `/api/dashboard/backup`                    | ✓    | tar archive of panel.db + configs                             |
-| POST     | `/api/dashboard/restore`                   | ✓    | upload a tar archive back                                     |
-| POST     | `/api/dashboard/rotate-password`           | ✓    | rotate admin password (re-verifies current)                   |
-| POST     | `/api/dashboard/change-panel-port`         | ✓    | change panel port (collision-checked)                         |
+Every route below except `/api/health`, `/api/countries`, `/api/i18n/{locale}`,
+and the auth endpoints requires a signed session cookie. Mutating requests
+additionally require the CSRF header. Interactive OpenAPI docs are generated from
+the code at `/docs` and are authoritative.
 
-Interactive OpenAPI docs at `/docs` once the panel is running.
+| Verb | Path | Purpose |
+| ---- | ---- | ------- |
+| GET | `/api/health` | liveness probe |
+| GET | `/api/countries` | selectable egress regions |
+| GET | `/api/i18n/{locale}` | translation bundle (`en` ships today) |
+| POST | `/auth/login` · `/auth/logout` | set / clear session + CSRF cookies (204) |
+| GET | `/auth/csrf` | mint or refresh the CSRF cookie |
+| GET | `/api/me` | current user + `wizard_completed` |
+| GET | `/api/wizard` | current step + step data |
+| POST | `/api/wizard/countries` · `/ports` · `/xui-detect` · `/xui-creds` · `/clone-template` | wizard steps 1, 2, 4, 5, 6 |
+| POST | `/api/wizard/apply` · `/clone` | wizard steps 3 and 7 (SSE) |
+| POST | `/api/wizard/back` | return to the previous step |
+| GET | `/api/wizard/inbounds` | list 3x-ui inbounds |
+| GET | `/api/dashboard/countries` | country cards |
+| PATCH · DELETE | `/api/dashboard/countries/{code}` | enable/disable · teardown |
+| POST | `/api/dashboard/countries/{code}/_ping` · `_reclone` · `_ports` | latency probe · re-clone inbound · change ports |
+| GET | `/api/dashboard/tunnels/{code}/logs` | journal tail |
+| POST | `/api/dashboard/reapply` | rewrite, restart, re-clone unhealthy |
+| POST | `/api/dashboard/backup` · `/restore` | tar archive out · in |
+| POST | `/api/dashboard/rotate-password` · `/change-panel-port` | credential and port changes |
 
 ---
 
 ## Security
 
-The panel implements defence-in-depth — listed below are the v1.0.0 controls:
+- **bcrypt** password hashing; the admin password is never stored in plaintext.
+- **Signed session cookies** (`itsdangerous`) keyed off a 32-byte secret generated
+  at install time and preserved across upgrades. 12-hour TTL.
+- **CSRF** signed double-submit cookie, constant-time compared on
+  POST/PUT/PATCH/DELETE. The SSE endpoints and the login flow are exempt by
+  design (`EventSource` cannot send custom headers).
+- **Login rate limiting** — 10 attempts per 60s per IP by default, returning 429
+  without burning bcrypt CPU. A successful login clears the bucket.
+- **3x-ui credentials encrypted at rest** in `panel.db` with a dedicated salt, so
+  the blob cannot be replayed as a session cookie.
+- **Password rotation re-verifies the current password**, so a stolen session
+  cookie alone cannot take over the account.
+- **systemd hardening** — dedicated unprivileged `psiphon3xui` user,
+  `NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, and only
+  the capability needed to bind the chosen port.
 
-- **bcrypt-hashed admin password** — never stored in plaintext.
-- **Signed session cookies** — `itsdangerous.URLSafeTimedSerializer` keyed off
-  a 32-byte secret generated at install time (preserved across re-runs of
-  `install.sh` so cookies survive upgrades). 12-hour TTL.
-- **CSRF protection** — signed double-submit cookie. The SPA reads
-  `psiphon3xui_csrf` and echoes it back in the `X-CSRF-Token` header. The
-  middleware enforces constant-time comparison on POST/PUT/PATCH/DELETE. The
-  SSE endpoints (`/api/wizard/apply`, `/api/wizard/clone`) and the auth flow
-  itself are exempt (EventSource can't carry custom headers; login is what
-  mints the CSRF cookie in the first place).
-  - The enforcement flag is `PSIPHON3XUI_CSRF_ENFORCE` (defaults to `true`
-    in production setups, set by the installer via `panel.env`); flip to
-    `false` only if you script the panel with a tool whose HTTP client can't
-    surface cookies back as headers.
-- **Login rate-limit** — in-memory sliding-window bucket, 10 attempts per
-  60s per client IP by default. Failure → 429 (no bcrypt CPU burned in the
-  rejection path). Tunable via `PSIPHON3XUI_LOGIN_RATE_LIMIT` /
-  `PSIPHON3XUI_LOGIN_RATE_WINDOW`. A successful login clears the IP's bucket.
-- **Optional HTTPS** — the installer no longer prompts for self-signed HTTPS;
-  the knob remains available by hand-editing `panel.env` (set
-  `PSIPHON3XUI_TLS_CERT` / `PSIPHON3XUI_TLS_KEY` / `PSIPHON3XUI_HTTPS_ONLY=true`)
-  or by fronting with Caddy. Enabling it flips the `Secure` flag on the
-  session + CSRF cookies.
-- **3x-ui credential at-rest encryption** — the wizard caches the panel's
-  password after the cred verify step so the apply/clone steps can reuse the
-  session; the cached blob is encrypted with the same `URLSafeTimedSerializer`
-  and salted ("psiphon-3x-ui-credential-vault") so it can't be swapped back
-  into a session cookie.
-- **CSRF re-verification on password rotation** — `POST /api/dashboard/rotate-password`
-  re-verifies the current bcrypt hash before writing the new one; a leaked
-  session cookie alone can't rotate the password.
-- **systemd hardening** — `NoNewPrivileges`, `ProtectSystem=strict`,
-  `ProtectHome`, `PrivateTmp`, dedicated `psiphon3xui` user/group, only the
-  capabilities needed to bind admin-chosen ports.
+**Deploy notes.** The installer binds the panel on `0.0.0.0`, so it is reachable
+on every interface as soon as the port is open. Put it behind TLS and restrict
+access at the edge. Out of scope for v1: 2FA/WebAuthn, per-device request
+signing, IP allowlists.
 
-Out of scope for v1: webauthn / 2FA, request signing per device, IP allowlists.
-Production deployments behind a reverse proxy should add rate-limits at the
-edge (Cloudflare / Caddy) in addition to the panel's in-process limit.
+### HTTPS
+
+The panel serves plain HTTP by default and is not prompted for TLS at install
+time. The recommended setup is [Caddy](https://caddyserver.com/) on 443
+reverse-proxying to the panel port, which handles Let's Encrypt for you. To
+terminate TLS in the panel itself, set `PSIPHON3XUI_TLS_CERT`,
+`PSIPHON3XUI_TLS_KEY`, and `PSIPHON3XUI_HTTPS_ONLY=true` in
+`/opt/psiphon-3x-ui/panel.env` and restart the service; that also flips the
+`Secure` flag on the session and CSRF cookies.
 
 ---
 
-## Project status
+## Configuration
 
-Phases 0–7 are complete and validated by 240 passing tests + 4 green gates.
-A full phased roadmap is in [`plans/ROADMAP.md`](plans/ROADMAP.md).
+Runtime settings live in `panel.config.Settings` (env prefix `PSIPHON3XUI_`).
+The installer writes `/opt/psiphon-3x-ui/panel.env`, read by systemd via
+`EnvironmentFile=`. Edit it and `systemctl restart psiphon-3x-ui` to apply.
 
-| Phase | Scope                                                          | Status |
-| ----- | -------------------------------------------------------------- | :----: |
-| 0     | Repository skeleton, CI, docs scaffolding                     | ✅     |
-| 1     | Infrastructure patterns (installer bootstrap, prompt, deps)  | ✅     |
-| 2     | Async/await + lifespan scaffolds (sing venv, systemd unit)    | ✅     |
-| 3     | Wizard state machine + auth + bcrypt sessions                 | ✅     |
-| 4     | Psiphon per-country tunnels (apply step, SOCKS5 probing)       | ✅     |
-| 5     | Clone engine + wizard finalize (XUI detect, inbounds, clone) | ✅     |
-| 6     | Management dashboard SPA + REST surface (46 tests)            | ✅     |
-| 7     | Hardening — CSRF / rate-limit / HTTPS / i18n / uninstall      | ✅     |
+| Variable | Default | Purpose |
+| -------- | ------- | ------- |
+| `PSIPHON3XUI_HOST` | `127.0.0.1` in code; installer writes `0.0.0.0` | uvicorn bind host |
+| `PSIPHON3XUI_PORT` | `8080` in code; chosen at install | uvicorn bind port |
+| `PSIPHON3XUI_SESSION_SECRET` | `dev-only-change-me` | signs session cookies and encrypts stored 3x-ui credentials — **must** be set in production |
+| `PSIPHON3XUI_DB_PATH` | `/opt/psiphon-3x-ui/panel.db` | SQLite database |
+| `PSIPHON3XUI_PSIPHON_BINARY` | `/opt/psiphon-3x-ui/bin/psiphon-tunnel-core` | binary the per-country units execute |
+| `PSIPHON3XUI_PSIPHON_CONFIG_DIR` | `/opt/psiphon-3x-ui/config` | per-country generated configs |
+| `PSIPHON3XUI_COUNTRIES_FILE` | packaged `panel/data/countries.yaml` | egress-region list |
+| `PSIPHON3XUI_TLS_CERT` / `_TLS_KEY` | unset | panel-terminated TLS |
+| `PSIPHON3XUI_HTTPS_ONLY` | `false` | mark cookies `Secure` |
+| `PSIPHON3XUI_CSRF_ENFORCE` | `true` | CSRF middleware toggle |
+| `PSIPHON3XUI_LOGIN_RATE_LIMIT` / `_LOGIN_RATE_WINDOW` | `10` / `60` | login attempts per window (seconds) |
+| `PSIPHON3XUI_DEBUG` | `false` | reload + dev tooling |
 
-### Tests
+`PSIPHON3XUI_SESSION_SECRET` is required by any out-of-band tooling that decrypts
+stored credentials — for example `python -m panel.uninstall` must run with
+`panel.env` sourced, or the 3x-ui signature check fails and nothing is removed.
 
-A snapshot of the suite at v1.0.0:
+### Psiphon upstream values
 
+Per-country tunnels work with no configuration. The upstream fields
+tunnel-core needs (`PropagationChannelId`, `SponsorId`, the remote server list
+URL and its signature public key, and three modern additional fields) are the
+**public bootstrap values shipped inside every public Psiphon client**, baked into
+[`panel/psiphon/__init__.py`](panel/psiphon/__init__.py) as `_PUBLIC_*` constants.
+They are not commercial secrets.
+
+Commercial Psiphon sponsors whose values differ can override them via
+`PSIPHON_PROPAGATION_CHANNEL_ID`, `PSIPHON_SPONSOR_ID`,
+`PSIPHON_REMOTE_SERVER_LIST_URL`, and
+`PSIPHON_REMOTE_SERVER_LIST_SIGNATURE_PUBLIC_KEY` in `panel.env`. An override
+that looks like a placeholder (all-`F`s, all-`0`s, a `"..."` stub, a non-base64
+key, a non-HTTP URL) is rejected at config-write time with
+`PsiphonCredentialError` rather than deathlooping the tunnel. Formats and
+rejection rules are in
+[`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md#psiphon-inc-upstream-credentials--optional-overrides-phase-24).
+
+---
+
+## Development
+
+The panel is cross-platform and testable on any host; the installer and systemd
+units are Ubuntu-only.
+
+```bash
+pip install -r tests/requirements.txt
+pip install -e .
+
+PSIPHON3XUI_SESSION_SECRET=ci-secret pytest tests -ra
+ruff check panel tests
+ruff format --check panel tests
+shellcheck -S warning install.sh installer/*.sh
+python -m panel                      # dev server on 127.0.0.1:8080
 ```
-$ python -m pytest tests/ -q
-240 passed, 3 skipped in 92.71s
+
+Build the wheel from the **repository root** — `pyproject.toml` lives there and
+setuptools resolves `panel/` relative to it:
+
+```bash
+python -m build --wheel --outdir dist
 ```
 
-- **ruff check** — `0 errors` across `panel` + `tests`.
-- **ruff format --check** — `32 files already formatted`.
-- **shellcheck** — `9/9 install.sh + installer/*.sh` clean.
-- **pytest** — `240 passed, 3 skipped` (the 3 skips are the
-  `bash install.sh --uninstall` smoke tests, gated by `shutil.which("bash")` on
-  Windows dev hosts; run cleanly on Ubuntu CI).
+Run the four gates above before pushing; the installer deploys `main` directly,
+so `main` is the release channel.
 
 ---
 
-## Configuration reference
+## Documentation
 
-All panel runtime knobs live in `panel.config.Settings`, read from
-environment (env prefix `PSIPHON3XUI_`) or `panel.env` (systemd's
-EnvironmentFile). The installer writes the latter at install time; you can
-edit it and `systemctl restart psiphon-3x-ui` to pick up changes:
-
-| Env var                              | Default                                  | Purpose                                                              |
-| ------------------------------------ | ---------------------------------------- | -------------------------------------------------------------------- |
-| `PSIPHON3XUI_HOST`                   | `0.0.0.0`                                | uvicorn bind host                                                    |
-| `PSIPHON3XUI_PORT`                   | `8080` (dev); installer may differ       | uvicorn bind port                                                    |
-| `PSIPHON3XUI_DB_PATH`                | `/opt/psiphon-3x-ui/panel.db`            | SQLite database (also written via panel.db)                          |
-| `PSIPHON3XUI_SESSION_SECRET`         | `dev-only-change-me`                     | signed cookies — installer writes 32 hex bytes                       |
-| `PSIPHON3XUI_PSIPHON_BINARY`         | `/opt/psiphon-3x-ui/bin/psiphon-tunnel-core` | per-country units ExecStart this binary                           |
-| `PSIPHON3XUI_PSIPHON_CONFIG_DIR`     | `/opt/psiphon-3x-ui/config`             | per-country generated configs land here                               |
-| `PSIPHON3XUI_DEBUG`                  | `false`                                  | uvicorn reload + dev tooling                                         |
-| `PSIPHON3XUI_TLS_CERT`               | (none)                                   | TLS cert path — set manually in panel.env to enable panel TLS         |
-| `PSIPHON3XUI_TLS_KEY`                | (none)                                   | TLS key path — set manually in panel.env to enable panel TLS          |
-| `PSIPHON3XUI_HTTPS_ONLY`             | `false`                                  | flip `Secure` flag on session + CSRF cookies                          |
-| `PSIPHON3XUI_CSRF_ENFORCE`           | `true` (production); `0` in tests        | enable/disable the CSRF middleware                                    |
-| `PSIPHON3XUI_LOGIN_RATE_LIMIT`       | `10`                                     | attempts per window before 429                                       |
-| `PSIPHON3XUI_LOGIN_RATE_WINDOW`       | `60`                                     | sliding-window width in seconds                                      |
-
-### Psiphon-Inc upstream credentials (Hotfix #14 — required for tunnels to actually establish)
-
-These four are **OPTIONAL OVERRIDES** (Phase 24): the public-bootstrap
-values are baked into [`panel.psiphon`](panel/psiphon/__init__.py) as
-`_PUBLIC_*` module constants (extracted from the public Psiphon-3 client
-APK) and used as defaults when no env var is set. The panel reads these env
-vars via [`panel.psiphon.render_config`](panel/psiphon/__init__.py) at
-config-write time. **A missing env var does NOT raise** (the baked-in
-default is used); the panel fast-fails with `PsiphonCredentialError` only
-if your override value LOOKS LIKE a known placeholder (all-`F`'s / all-`0`'s
-/ `"..."` stub / non-base64 sig-pubkey / non-`http(s)://` URL). Commercial
-sponsors only need to set these; fresh installs leave them blank. See
-[`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md#psiphon-inc-upstream-credentials--optional-overrides-phase-24)
-for the override-format details + the placeholder-rejector rules.
-
-| Env var (panel.env)                                  | Default              | Purpose                                                                  |
-| ---------------------------------------------------- | -------------------- | ------------------------------------------------------------------------ |
-| `PSIPHON_PROPAGATION_CHANNEL_ID`                     | `92AACC5BABE0944C`  | 16 hex chars override; rejected if your value looks like all-`F`'s       |
-| `PSIPHON_SPONSOR_ID`                                 | `1BC527D3D09985CF`  | 16 hex chars override (distinct from PropChannel); rejected if your value looks like all-`0`'s |
-| `PSIPHON_REMOTE_SERVER_LIST_URL`                     | (4-mirror S3 set)   | singular override → wrapped to a 1-element `RemoteServerListURLs` array with the URL base64-encoded (per tunnel-core's `TransferURLs.DecodeAndValidate`); must start with `https://`/`http://` |
-| `PSIPHON_REMOTE_SERVER_LIST_SIGNATURE_PUBLIC_KEY`    | RSA-2048 SPKI ~716 chars | base64-encoded public key override. The public value is RSA-2048 SPKI (NOT Ed25519); the regex `[A-Za-z0-9+/]{42,}={0,2}` also tolerates shorter Ed25519 (~44 chars) forms. Rejected if your override value is the shipped pre-Hotfix-14 stub. |
-
----
-
-## Contributing & shipping changes
-
-There is no tag/release step — the installer tracks `main`:
-
-1. Run the validation gates (above) locally — they must be green.
-2. Commit and push `main`.
-3. Re-run the installer on the server; the new code is installed.
-
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the codebase layout and
-[`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) for common install-time
-failure modes (port collisions / systemd).
+| Document | Contents |
+| -------- | -------- |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | component map, data flow, per-country routing layer |
+| [`docs/XUI_API.md`](docs/XUI_API.md) | the verified 3x-ui API contract and request/response shapes |
+| [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) | install failure modes, Go-version gotchas, credential overrides |
+| [`docs/COUNTRIES.md`](docs/COUNTRIES.md) | editing the egress-region list |
+| [`plans/ROADMAP.md`](plans/ROADMAP.md) | phased development history |
 
 ---
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE). The Psiphon binary is
-downloaded at install time and remains under its own license; it is **not**
-redistributed here. See `LICENSE` notes for details.
+Released under the [MIT License](LICENSE). Psiphon-3X-UI is an independent
+project and is not affiliated with or endorsed by Psiphon Inc. or the 3x-ui
+project. It redistributes neither `psiphon-tunnel-core` nor `3x-ui`; see
+[`LICENSE`](LICENSE) for the third-party notices.

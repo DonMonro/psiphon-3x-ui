@@ -20,15 +20,104 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
----
+===============================================================================
+THIRD-PARTY SOFTWARE NOTICES
+===============================================================================
 
-This project downloads and uses the `psiphon-tunnel-core` binary which is
-licensed by Psiphon Inc. / Psiphon Labs under its own open-source license
-(Eclipse Public License / Apache 2.0; see https://github.com/Psiphon-Labs/psiphon-tunnel-core).
-This repository does NOT bundle that binary; it downloads it from its official
-release channel at install time, subject to that binary's own license.
+The MIT grant above covers the contents of this repository only. Psiphon-3X-UI
+installs and orchestrates third-party software that it does not include or
+redistribute. Each such component remains governed exclusively by its own
+license, reproduced at the URL given below.
 
-This project also integrates with, but does not redistribute, the Sanaei `3x-ui`
-panel (https://github.com/MHSanaei/3x-ui), which is released under its own
-license. Communication with `3x-ui` happens exclusively over its public HTTP
-API on the user's own server.
+-------------------------------------------------------------------------------
+1. psiphon-tunnel-core — GNU General Public License v3.0
+-------------------------------------------------------------------------------
+
+    Copyright (c) Psiphon Inc.
+    https://github.com/Psiphon-Labs/psiphon-tunnel-core
+    License: GPL-3.0
+    https://github.com/Psiphon-Labs/psiphon-tunnel-core/blob/master/LICENSE
+
+This repository contains no psiphon-tunnel-core source code and ships no
+psiphon-tunnel-core binary. At install time, `installer/psiphon_install.sh`
+clones the upstream repository at a pinned release tag on the operator's own
+machine and compiles `ConsoleClient` locally with the Go toolchain. The
+resulting binary is produced by, and stays on, the operator's server; it is
+never published or redistributed by this project.
+
+At run time, the panel and the compiled binary are separate operating-system
+processes. The panel supervises them through systemd and communicates with them
+only over local SOCKS5 (`127.0.0.1:<port>`); no Psiphon code is linked into,
+compiled with, or derived from the Python package in this repository.
+
+The Psiphon network parameters embedded in `panel/psiphon/__init__.py` as
+`_PUBLIC_*` constants (propagation channel id, sponsor id, remote server list
+URL and its signature public key, and the associated modern fields) are the
+public bootstrap values that Psiphon Inc. publishes inside every freely
+distributed Psiphon client. They are configuration values, not credentials
+issued to this project, and are included so that tunnels establish without
+manual setup.
+
+-------------------------------------------------------------------------------
+2. 3x-ui — GNU General Public License v3.0
+-------------------------------------------------------------------------------
+
+    Copyright (c) MHSanaei
+    https://github.com/MHSanaei/3x-ui
+    License: GPL-3.0
+    https://github.com/MHSanaei/3x-ui/blob/main/LICENSE
+
+This repository contains no 3x-ui source code and neither installs nor
+distributes 3x-ui. The operator installs 3x-ui independently. Psiphon-3X-UI
+interacts with an already-running 3x-ui instance exclusively over that
+instance's own authenticated HTTP API, on the operator's own server, using
+credentials the operator supplies. The verified request and response shapes this
+project relies on are documented in `docs/XUI_API.md`.
+
+By extension, Xray-core (https://github.com/XTLS/Xray-core, MPL-2.0) is used
+only as it is already installed and managed by 3x-ui. This project does not
+bundle, patch, or redistribute it; it writes configuration through the 3x-ui
+API.
+
+-------------------------------------------------------------------------------
+3. Front-end libraries loaded at run time
+-------------------------------------------------------------------------------
+
+The panel's HTML pages reference the following assets from the jsDelivr CDN:
+
+    Alpine.js          MIT        https://github.com/alpinejs/alpine
+    Pico.css           MIT        https://github.com/picocss/pico
+    Inter (Fontsource) OFL-1.1    https://github.com/rsms/inter
+
+No copy of any of them is vendored into this repository or into the distributed
+wheel; browsers fetch them directly from the CDN at page load.
+
+-------------------------------------------------------------------------------
+4. Python dependencies
+-------------------------------------------------------------------------------
+
+The panel's Python dependencies (FastAPI, uvicorn, SQLAlchemy, pydantic, httpx,
+bcrypt, itsdangerous, PyYAML, sse-starlette, python-multipart) are installed
+from PyPI into a virtual environment at install time and are not vendored here.
+Each is distributed under its own license — predominantly MIT, BSD, or Apache
+2.0. Run `pip-licenses` inside `/opt/psiphon-3x-ui/venv` for the resolved set.
+
+===============================================================================
+TRADEMARKS AND AFFILIATION
+===============================================================================
+
+"Psiphon" is a trademark of Psiphon Inc. "3x-ui" and "Xray" are the marks of
+their respective owners. Psiphon-3X-UI is an independent, unofficial project. It
+is not affiliated with, sponsored by, endorsed by, or supported by Psiphon Inc.,
+the 3x-ui project, or the Xray project. The names are used solely to identify
+the software this project interoperates with.
+
+===============================================================================
+OPERATOR RESPONSIBILITY
+===============================================================================
+
+This software is a network administration tool intended for use on servers the
+operator owns or is authorized to administer. Operators are responsible for
+complying with the laws and regulations applicable to them, with the terms of
+service of their hosting provider, and with the license and acceptable-use terms
+of the third-party software listed above.
