@@ -47,8 +47,8 @@ jobs:
             Install on an Ubuntu server with Sanaei 3x-ui already installed:
 
             ```bash
-            bash <(curl -sL https://raw.githubusercontent.com/DonMonro/p/${{ github.ref_name }}/install.sh) \
-              || bash <(wget -qO- https://raw.githubusercontent.com/DonMonro/p/${{ github.ref_name }}/install.sh)
+            bash <(curl -sL https://raw.githubusercontent.com/DonMonro/psiphon-3x-ui/${{ github.ref_name }}/install.sh) \
+              || bash <(wget -qO- https://raw.githubusercontent.com/DonMonro/psiphon-3x-ui/${{ github.ref_name }}/install.sh)
             ```
 
             Wheel integrity: see `sha256.txt`.

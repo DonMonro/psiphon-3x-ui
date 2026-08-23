@@ -5,7 +5,7 @@
 > server, exposing per-country outbound traffic through clones of an existing
 > 3x-ui inbound.
 
-[![CI](https://github.com/DonMonro/p/actions/workflows/ci.yml/badge.svg)](https://github.com/DonMonro/p/actions/workflows/ci.yml)
+[![CI](https://github.com/DonMonro/psiphon-3x-ui/actions/workflows/ci.yml/badge.svg)](https://github.com/DonMonro/psiphon-3x-ui/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Tests: 240 passing](https://img.shields.io/badge/tests-240%20passing-brightgreen)](#tests)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](#tests)
@@ -34,8 +34,8 @@
 > (exposing only local SOCKS proxies) if `3x-ui` is absent.
 
 ```bash
-sudo bash <(curl -sL https://raw.githubusercontent.com/DonMonro/p/main/install.sh) \
-  || sudo bash <(wget -qO- https://raw.githubusercontent.com/DonMonro/p/main/install.sh)
+sudo bash <(curl -sL https://raw.githubusercontent.com/DonMonro/psiphon-3x-ui/main/install.sh) \
+  || sudo bash <(wget -qO- https://raw.githubusercontent.com/DonMonro/psiphon-3x-ui/main/install.sh)
 ```
 
 > The one-liner tracks `main`, so a plain `git push` is all it takes to ship a
@@ -47,7 +47,7 @@ sudo bash <(curl -sL https://raw.githubusercontent.com/DonMonro/p/main/install.s
 > `429:: command not found`), clone instead — same code, no raw-file CDN:
 >
 > ```bash
-> rm -rf /tmp/p3x && git clone --depth 1 https://github.com/DonMonro/p.git /tmp/p3x \
+> rm -rf /tmp/p3x && git clone --depth 1 https://github.com/DonMonro/psiphon-3x-ui.git /tmp/p3x \
 >   && sudo bash /tmp/p3x/install.sh
 > ```
 
@@ -94,7 +94,7 @@ to stop and remove the install:
 # operator never downloaded install.sh to disk (the canonical Psiphon-3X-UI
 # install route is `bash <(curl -sL …install.sh)`). Pass `--uninstall` as
 # the first arg to the resulting shell:
-sudo bash <(curl -sL https://raw.githubusercontent.com/DonMonro/p/main/install.sh) --uninstall
+sudo bash <(curl -sL https://raw.githubusercontent.com/DonMonro/psiphon-3x-ui/main/install.sh) --uninstall
 # → Type "yes" to confirm: the panel service + /opt/psiphon-3x-ui are removed.
 #   3x-ui's own inbounds installed through it are NOT touched — you must
 #   delete them from 3x-ui manually.

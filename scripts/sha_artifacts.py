@@ -7,8 +7,12 @@ what an operator sees after a fresh ``git clone``) match the working-tree
 bytes on Windows dev hosts — provided the dev host didn't accidentally
 introduce CRLFs. This helper prints the SHA256 of every manifest entry so a
 contributor can patch ``release-artifacts.sha256`` after editing a shipped
-artefact, then run ``python scripts/verify_manifest.py`` to confirm parity at
-the released tag post-push.
+artefact.
+
+The companion ``scripts/verify_manifest.py`` (which re-fetched each artefact
+at a release tag to confirm parity post-push) was removed when the release
+tags were deleted in 2026-08 — installs track ``main``, so there is no tagged
+snapshot left to verify against.
 
 USAGE
 -----

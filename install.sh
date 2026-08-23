@@ -5,8 +5,8 @@
 # This is the single entrypoint referenced by the one-line install command
 # documented in README.md:
 #
-#   bash <(curl -sL https://raw.githubusercontent.com/DonMonro/p/main/install.sh) \
-#     || bash <(wget -qO- https://raw.githubusercontent.com/DonMonro/p/main/install.sh)
+#   bash <(curl -sL https://raw.githubusercontent.com/DonMonro/psiphon-3x-ui/main/install.sh) \
+#     || bash <(wget -qO- https://raw.githubusercontent.com/DonMonro/psiphon-3x-ui/main/install.sh)
 #
 # The two-URL form gives a curl→wget fallback so the command works on minimal
 # Ubuntu installs that ship only `wget`.
@@ -47,7 +47,7 @@ BIN_DIR="${INSTALL_PREFIX}/bin"
 # Add UA).
 # shellcheck disable=SC2034  # used by installer/panel_install.sh (per-country psiphon-tunnel-core datastore root)
 DATA_DIR="${INSTALL_PREFIX}/data"
-REPO_URL="https://github.com/DonMonro/p.git"
+REPO_URL="https://github.com/DonMonro/psiphon-3x-ui.git"
 # The git ref the curl|bash flow clones its helpers from. Defaults to `main`
 # so the operator's workflow stays "push a commit → re-run the installer →
 # the new code is installed" — no tag or release needed to test a change.
@@ -428,8 +428,8 @@ Usage: install.sh [--uninstall]
   Most operators reach this script via a curl-into-bash one-liner rather than
   downloading install.sh to disk; the curl form works for every subcommand:
 
-    bash <(curl -sL https://raw.githubusercontent.com/DonMonro/p/main/install.sh)            # install
-    sudo bash <(curl -sL https://raw.githubusercontent.com/DonMonro/p/main/install.sh) --uninstall
+    bash <(curl -sL https://raw.githubusercontent.com/DonMonro/psiphon-3x-ui/main/install.sh)            # install
+    sudo bash <(curl -sL https://raw.githubusercontent.com/DonMonro/psiphon-3x-ui/main/install.sh) --uninstall
 
   Operators who cloned the repo to disk and have install.sh in CWD can also:
 
