@@ -36,8 +36,8 @@ machine advances through six steps:
 
 ```
 countries → ports → apply → xui_creds → template → clone
-              ▲          ▲           ▲           ▲         ▲
-              └──────────┴───────────┴───────────┴─────────┘
+              ▲       ▲         ▲          ▲         ▲
+              └───────┴─────────┴──────────┴─────────┘
             (Phase 3)   ──────── (Phase 4) ─────────────  (Phase 5)
 ```
 
