@@ -63,13 +63,6 @@ sudo bash <(curl -sL https://raw.githubusercontent.com/DonMonro/psiphon-3x-ui/ma
   || sudo bash <(wget -qO- https://raw.githubusercontent.com/DonMonro/psiphon-3x-ui/main/install.sh)
 ```
 
-If `raw.githubusercontent.com` rate-limits you (bash reports errors like
-`429:: command not found`), clone instead — same code, no CDN:
-
-```bash
-rm -rf /tmp/p3x && git clone --depth 1 https://github.com/DonMonro/psiphon-3x-ui.git /tmp/p3x && sudo bash /tmp/p3x/install.sh
-```
-
 The installer:
 
 1. Installs system dependencies (`python3-venv`, `git`, `golang-go`, `jq`, `curl`, …).
