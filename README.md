@@ -22,7 +22,7 @@ One install command, one web panel, no manual Xray editing.
 
 ```
 client ──► 3x-ui inbound clone [🇺🇸 US]:<public_port> ──► local SOCKS5
-             │  Xray routing rule                              │
+             │  Xray routing rule                               │
              │  (inboundTag → outboundTag=psiphon-out-US)       ▼
              └── Xray socks outbound 127.0.0.1:<socks_port>   psiphon-tunnel-core
                    (top-level outbounds[])                  (EgressRegion=US) ──► internet (US exit)
