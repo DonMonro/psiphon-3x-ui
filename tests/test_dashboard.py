@@ -2249,3 +2249,229 @@ class TestPingCountry:
 
         r = client.post("/api/dashboard/countries/US/_ping")
         assert r.status_code in (401, 403), r.text
+
+
+# ===========================================================================
+# 16. GET/POST /api/dashboard/https-settings  (HTTPS/TLS card, Settings tab)
+# ===========================================================================
+def _stub_https_host(
+    monkeypatch, *, preflight=(True, "ok"), env=(True, "rewritten"), restart=(True, ""), calls=None
+):
+    """Model a host where the HTTPS side effects succeed (or fail on cue).
+
+    Records the ORDER of preflight → env-rewrite → restart into *calls*
+    (a shared list) so tests can assert the fail-safe ordering: a failed
+    preflight must abort before anything is written, and a failed env
+    rewrite must abort before the restart.
+    """
+    from panel.dashboard import router as dashboard_router
+
+    calls = calls if calls is not None else []
+
+    def _fake_preflight(cert, key):
+        calls.append(("preflight", str(cert), str(key)))
+        return preflight
+
+    def _fake_env(cert, key):
+        calls.append(("env", cert, key))
+        return env
+
+    def _fake_restart(reason="port-change"):
+        calls.append(("restart", reason))
+        return restart
+
+    monkeypatch.setattr(dashboard_router, "_tls_preflight", _fake_preflight)
+    monkeypatch.setattr(dashboard_router, "_update_panel_env_tls", _fake_env)
+    monkeypatch.setattr(dashboard_router, "_restart_panel_service", _fake_restart)
+    return calls
+
+
+class TestHttpsSettingsPanel:
+    def test_get_prefills_defaults_when_tls_unset(self, monkeypatch, tmp_path):
+        client = _client(monkeypatch, tmp_path)
+        _login(client)
+
+        r = client.get("/api/dashboard/https-settings")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["enabled"] is False
+        assert body["cert_path"] == "/root/cert/ip/fullchain.pem"
+        assert body["key_path"] == "/root/cert/ip/privkey.pem"
+
+    def test_get_reflects_env_set_tls(self, monkeypatch, tmp_path):
+        client = _client(monkeypatch, tmp_path)
+        _login(client)
+        monkeypatch.setenv("PSIPHON3XUI_TLS_CERT", "/etc/ssl/custom.pem")
+        monkeypatch.setenv("PSIPHON3XUI_TLS_KEY", "/etc/ssl/custom.key")
+        monkeypatch.setenv("PSIPHON3XUI_HTTPS_ONLY", "true")
+        from panel import config
+
+        config.get_settings.cache_clear()
+
+        r = client.get("/api/dashboard/https-settings")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["enabled"] is True
+        assert body["https_only"] is True
+        assert body["cert_path"] == "/etc/ssl/custom.pem"
+        assert body["key_path"] == "/etc/ssl/custom.key"
+
+    def test_enable_happy_path_validates_then_writes_then_restarts(self, monkeypatch, tmp_path):
+        """THE ordering invariant: preflight → panel.env rewrite → restart.
+
+        A restart into a broken TLS config is unrecoverable (Restart=on-abort
+        does not retry a plain exit-1), so nothing may be written — and the
+        service must not be touched — before the pair is proven usable.
+        """
+        client = _client(monkeypatch, tmp_path)
+        _login(client)
+        calls = _stub_https_host(monkeypatch)
+
+        r = client.post(
+            "/api/dashboard/https-settings",
+            json={"cert_path": "/etc/ssl/a.pem", "key_path": "/etc/ssl/b.pem"},
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["applied"] is True
+        assert body["enabled"] is True
+        assert body["cert_path"] == "/etc/ssl/a.pem"
+        assert body["key_path"] == "/etc/ssl/b.pem"
+        assert body["service_restart_ok"] is True
+
+        kinds = [c[0] for c in calls]
+        assert kinds == ["preflight", "env", "restart"], kinds
+
+    def test_preflight_failure_is_400_and_mutates_nothing(self, monkeypatch, tmp_path):
+        """An unreadable/invalid pair must be refused BEFORE panel.env is
+        rewritten — the next restart would crash uvicorn at bind."""
+        client = _client(monkeypatch, tmp_path)
+        _login(client)
+        calls = _stub_https_host(
+            monkeypatch,
+            preflight=(
+                False,
+                "public key at /root/cert/x.pem is not readable by the panel process",
+            ),
+        )
+
+        r = client.post(
+            "/api/dashboard/https-settings",
+            json={"cert_path": "/root/cert/x.pem", "key_path": "/root/cert/y.pem"},
+        )
+        assert r.status_code == 400, r.text
+        assert "not readable" in r.json()["detail"]
+        # Only the preflight ran — the recorder sees Path-serialized paths, so
+        # compare host-separator-tolerantly (dev box is Windows).
+        assert [c[0] for c in calls] == ["preflight"], calls
+        assert calls[0][1].replace("\\", "/") == "/root/cert/x.pem"
+        assert calls[0][2].replace("\\", "/") == "/root/cert/y.pem"
+
+    def test_half_pair_is_400(self, monkeypatch, tmp_path):
+        """A cert without its key (or vice versa) would make the next restart
+        unbindable — refuse it up front."""
+        client = _client(monkeypatch, tmp_path)
+        _login(client)
+        calls = _stub_https_host(monkeypatch)
+
+        r = client.post(
+            "/api/dashboard/https-settings",
+            json={"cert_path": "/etc/ssl/a.pem", "key_path": ""},
+        )
+        assert r.status_code == 400, r.text
+        assert "both" in r.json()["detail"]
+        assert calls == [], "a 400 half-pair must not touch env or restart"
+
+    def test_env_rewrite_failure_is_502_and_never_restarts(self, monkeypatch, tmp_path):
+        """Same abort contract as change-panel-port: once panel.env cannot be
+        written there is no in-band way back, so the service must NOT be
+        restarted into a config the file never received."""
+        client = _client(monkeypatch, tmp_path)
+        _login(client)
+        calls = _stub_https_host(monkeypatch, env=(False, "env file not found"))
+
+        r = client.post(
+            "/api/dashboard/https-settings",
+            json={"cert_path": "/etc/ssl/a.pem", "key_path": "/etc/ssl/b.pem"},
+        )
+        assert r.status_code == 502, r.text
+        assert [c[0] for c in calls] == ["preflight", "env"], calls
+
+    def test_disable_happy_path_clears_tls_and_restarts(self, monkeypatch, tmp_path):
+        client = _client(monkeypatch, tmp_path)
+        _login(client)
+        # panel.env is the disable branch's source of truth (the running
+        # process env can be stale after a failed restart), so model a host
+        # whose env file currently carries an enabled TLS pair.
+        env_file = tmp_path / "panel.env"
+        env_file.write_text(
+            "PSIPHON3XUI_PORT=18001\n"
+            "PSIPHON3XUI_TLS_CERT=/etc/ssl/a.pem\n"
+            "PSIPHON3XUI_TLS_KEY=/etc/ssl/b.pem\n"
+            "PSIPHON3XUI_HTTPS_ONLY=true\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("PSIPHON3XUI_TLS_CERT", "/etc/ssl/a.pem")
+        monkeypatch.setenv("PSIPHON3XUI_TLS_KEY", "/etc/ssl/b.pem")
+        monkeypatch.setenv("PSIPHON3XUI_HTTPS_ONLY", "true")
+        from panel.dashboard import router as dashboard_router
+
+        monkeypatch.setattr(dashboard_router, "_panel_env_path", lambda: env_file)
+        from panel import config
+
+        config.get_settings.cache_clear()
+        calls = _stub_https_host(monkeypatch)
+
+        r = client.post("/api/dashboard/https-settings", json={"cert_path": "", "key_path": ""})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["applied"] is True
+        assert body["enabled"] is False
+        assert [c[0] for c in calls] == ["env", "restart"], calls
+        # Disable writes no cert/key — only clears the lines + flips the flag.
+        env_call = next(c for c in calls if c[0] == "env")
+        assert env_call[1] is None and env_call[2] is None
+
+    def test_disable_when_already_disabled_short_circuits(self, monkeypatch, tmp_path):
+        client = _client(monkeypatch, tmp_path)
+        _login(client)
+        calls = _stub_https_host(monkeypatch)
+
+        r = client.post("/api/dashboard/https-settings", json={"cert_path": "", "key_path": ""})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["applied"] is False
+        assert calls == [], "no-op disable must not rewrite env or restart"
+
+    def test_enable_when_already_enabled_same_paths_short_circuits(self, monkeypatch, tmp_path):
+        client = _client(monkeypatch, tmp_path)
+        _login(client)
+        monkeypatch.setenv("PSIPHON3XUI_TLS_CERT", "/etc/ssl/a.pem")
+        monkeypatch.setenv("PSIPHON3XUI_TLS_KEY", "/etc/ssl/b.pem")
+        monkeypatch.setenv("PSIPHON3XUI_HTTPS_ONLY", "true")
+        from panel import config
+
+        config.get_settings.cache_clear()
+        calls = _stub_https_host(monkeypatch)
+
+        r = client.post(
+            "/api/dashboard/https-settings",
+            json={"cert_path": "/etc/ssl/a.pem", "key_path": "/etc/ssl/b.pem"},
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["applied"] is False
+        assert body["enabled"] is True
+        assert calls == [], "no-op enable must not restart the service"
+
+    def test_https_settings_require_auth(self, monkeypatch, tmp_path):
+        client = _client(monkeypatch, tmp_path)
+
+        r = client.get("/api/dashboard/https-settings")
+        assert r.status_code in (401, 403), r.text
+
+        r = client.post(
+            "/api/dashboard/https-settings",
+            json={"cert_path": "/etc/ssl/a.pem", "key_path": "/etc/ssl/b.pem"},
+        )
+        assert r.status_code in (401, 403), r.text

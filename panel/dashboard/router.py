@@ -28,6 +28,7 @@ import io
 import json
 import logging
 import re
+import ssl
 import subprocess
 import tarfile
 from datetime import datetime, timezone
@@ -362,6 +363,62 @@ def _panel_env_path() -> Path:
     return _panel_db_path().parent / "panel.env"
 
 
+def _rewrite_panel_env(
+    replacements: dict[str, str],
+    remove: set[str] | None = None,
+) -> tuple[bool, str]:
+    """Rewrite one or more ``KEY=value`` lines in ``${INSTALL_PREFIX}/panel.env``.
+
+    Generic in-place editor shared by the in-panel port change and the HTTPS
+    settings card. Each key in *replacements* replaces (or is appended after)
+    its existing line; keys in *remove* are stripped out entirely. Commented /
+    indented variants of a line are matched by regex so the installer's exact
+    heredoc rendering is tolerated. Keeps the trailing newline. Returns
+    ``(ok, detail)`` — a missing env file or an OSError is reported, never
+    raised (callers turn a failure into a 502 + rollback rather than a 500).
+    """
+    path = _panel_env_path()
+    try:
+        if not path.is_file():
+            return False, f"env file not found at {path}"
+        text = path.read_text(encoding="utf-8")
+        lines = text.splitlines()
+        new_lines: list[str] = []
+        replaced: set[str] = set()
+        for ln in lines:
+            matched = False
+            for key, value in replacements.items():
+                if not replaced or key not in replaced:
+                    key_re = re.compile(rf"^[#\s]*{re.escape(key)}\s*=.*$")
+                    if key_re.match(ln):
+                        new_lines.append(f"{key}={value}")
+                        replaced.add(key)
+                        matched = True
+                        break
+            if not matched:
+                for key in remove or ():
+                    key_re = re.compile(rf"^[#\s]*{re.escape(key)}\s*=.*$")
+                    if key_re.match(ln):
+                        matched = True
+                        break
+            if not matched:
+                new_lines.append(ln)
+        # Any replacement key not yet written — the env file lacked the line
+        # entirely — is appended at the bottom.
+        for key, value in replacements.items():
+            if key not in replaced:
+                new_lines.append(f"{key}={value}")
+                replaced.add(key)
+        out = "\n".join(new_lines)
+        if not out.endswith("\n"):
+            out += "\n"
+        path.write_text(out, encoding="utf-8")
+        keys = ", ".join(sorted(replacements) + sorted(remove or ()))
+        return True, f"panel.env rewritten ({keys}) in {path}"
+    except OSError as exc:
+        return False, f"env rewrite failed: {type(exc).__name__}: {exc}"
+
+
 def _update_panel_env_port(new_port: int) -> tuple[bool, str]:
     """Hotfix #11 (Bug #3): rewrite ``PSIPHON3XUI_PORT=<new>`` in
     ``${INSTALL_PREFIX}/panel.env`` **before** ``systemctl restart``.
@@ -375,36 +432,98 @@ def _update_panel_env_port(new_port: int) -> tuple[bool, str]:
     never opened. Now we rewrite the env file in place so the next boot reads
     the new port. Returns (ok, detail).
     """
+    return _rewrite_panel_env({"PSIPHON3XUI_PORT": str(new_port)})
+
+
+# Default paths the dashboard's HTTPS card pre-fills. These match where the
+# operator typically drops a certbot/"cert for bare IP" fullchain + privkey;
+# both are just editable defaults, not hard requirements.
+DEFAULT_TLS_CERT_PATH = "/root/cert/ip/fullchain.pem"
+DEFAULT_TLS_KEY_PATH = "/root/cert/ip/privkey.pem"
+
+
+def _tls_preflight(cert: Path, key: Path) -> tuple[bool, str]:
+    """Verify a TLS cert/key pair is usable BEFORE panel.env is rewritten.
+
+    A pair that exists but is unreadable or invalid would make uvicorn die at
+    bind time on the next restart — and the unit's ``Restart=on-abort`` policy
+    does NOT retry a plain exit-1, so the panel would be gone from its port
+    with no in-band way back. Checks, in order:
+
+    1. both files exist;
+    2. both are readable by THIS (unprivileged) process — the common failure
+       is certs under ``/root/`` that only root can traverse;
+    3. the pair actually loads as a TLS cert chain (openssl-grade validation
+       without shelling out).
+    """
+    for label, p in (("public key", cert), ("private key", key)):
+        if not p.is_file():
+            return False, f"{label} not found at {p}"
+    for label, p in (("public key", cert), ("private key", key)):
+        try:
+            with open(p, "rb") as fh:
+                fh.read(64)
+        except OSError as exc:
+            return False, (
+                f"{label} at {p} is not readable by the panel process "
+                f"({type(exc).__name__}: {exc}). Fix permissions/ownership "
+                f"(e.g. chgrp + chmod g+r, and make the parent directories "
+                f"traversable) or move the files somewhere the psiphon3xui "
+                f"user can read."
+            )
+    try:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(str(cert), str(key))
+    except (OSError, ssl.SSLError) as exc:
+        return False, f"cert/key pair failed to load: {type(exc).__name__}: {exc}"
+    return True, f"TLS pair OK ({cert}, {key})"
+
+
+def _update_panel_env_tls(cert: Path | None, key: Path | None) -> tuple[bool, str]:
+    """Write/clear the TLS lines in ``panel.env`` (companion to the HTTPS card).
+
+    Enable: writes ``PSIPHON3XUI_TLS_CERT``/``_TLS_KEY`` and flips
+    ``PSIPHON3XUI_HTTPS_ONLY=true`` (which sets the Secure flag on session +
+    CSRF cookies via panel.auth._cookies_secure). Disable: removes the cert/key
+    lines and writes ``HTTPS_ONLY=false``. Returns (ok, detail).
+    """
+    if cert and key:
+        return _rewrite_panel_env(
+            {
+                "PSIPHON3XUI_TLS_CERT": str(cert),
+                "PSIPHON3XUI_TLS_KEY": str(key),
+                "PSIPHON3XUI_HTTPS_ONLY": "true",
+            },
+        )
+    return _rewrite_panel_env(
+        {"PSIPHON3XUI_HTTPS_ONLY": "false"},
+        remove={"PSIPHON3XUI_TLS_CERT", "PSIPHON3XUI_TLS_KEY"},
+    )
+
+
+def _panel_env_has_tls() -> bool:
+    """Whether ``panel.env`` currently carries a PSIPHON3XUI_TLS_CERT/_KEY pair.
+
+    The disable branch consults THIS — not the running process's env — because
+    panel.env is what the next restart will boot from. If an earlier enable
+    wrote the pair but its restart failed, the process still runs plain HTTP;
+    a disable that only checked the live env would short-circuit as a no-op
+    and leave the TLS lines in the file, silently re-enabling HTTPS on the
+    next manual restart.
+    """
     path = _panel_env_path()
     try:
-        if not path.is_file():
-            return False, f"env file not found at {path}"
         text = path.read_text(encoding="utf-8")
-        lines = text.splitlines()
-        # Keep trailing newline if present. Use a regex so we tolerate the
-        # installer's exact `PSIPHON3XUI_PORT=${PANEL_PORT}` rendering.
-        new_lines: list[str] = []
-        port_re = re.compile(r"^[#\s]*PSIPHON3XUI_PORT\s*=.*$")
-        replaced = False
-        for ln in lines:
-            if not replaced and port_re.match(ln):
-                new_lines.append(f"PSIPHON3XUI_PORT={new_port}")
-                replaced = True
-            else:
-                new_lines.append(ln)
-        if not replaced:
-            # Env file exists but lacks the line entirely — append it.
-            new_lines.append(f"PSIPHON3XUI_PORT={new_port}")
-        out = "\n".join(new_lines)
-        if not out.endswith("\n"):
-            out += "\n"
-        path.write_text(out, encoding="utf-8")
-        return True, f"PSIPHON3XUI_PORT rewritten to {new_port} in {path}"
-    except OSError as exc:
-        return False, f"env rewrite failed: {type(exc).__name__}: {exc}"
+    except OSError:
+        return False
+
+    def has(key: str) -> bool:
+        return re.search(rf"^[#\s]*{re.escape(key)}\s*=\s*\S", text, re.MULTILINE) is not None
+
+    return has("PSIPHON3XUI_TLS_CERT") and has("PSIPHON3XUI_TLS_KEY")
 
 
-def _restart_panel_service() -> tuple[bool, str]:
+def _restart_panel_service(reason: str = "port-change") -> tuple[bool, str]:
     """Hotfix #10 (Bug #5) + Hotfix #11 (Bug #3 part 2) + **Hotfix #12
     (Bug #3 part 2, real fix)**: trigger a detached systemctl restart of
     ``psiphon-3x-ui.service``.
@@ -444,7 +563,7 @@ def _restart_panel_service() -> tuple[bool, str]:
                 "systemd-run",
                 "--no-block",
                 "--unit=psiphon-3x-ui-restart",
-                "--description=psiphon-3x-ui panel port-change self-restart",
+                f"--description=psiphon-3x-ui panel {reason} self-restart",
                 "--collect",
                 "systemctl",
                 "restart",
@@ -567,6 +686,18 @@ class ChangePanelPortBody(BaseModel):
     """``POST /api/dashboard/change-panel-port`` body."""
 
     new_port: int = Field(..., ge=1024, le=65535, description="new panel listen port")
+
+
+class HttpsSettingsBody(BaseModel):
+    """``POST /api/dashboard/https-settings`` body.
+
+    Both paths populated → enable TLS at the panel layer; both empty →
+    disable it. Exactly one populated is a 400 (a cert without its key — or
+    vice versa — would make the next restart unbindable).
+    """
+
+    cert_path: str = Field(default="", description="public key / fullchain PEM path")
+    key_path: str = Field(default="", description="private key PEM path")
 
 
 # ---------------------------------------------------------------------------
@@ -2029,6 +2160,155 @@ async def change_panel_port(
         "changed": True,
         "old_port": old_port,
         "new_port": new_port,
+        "env_rewrite_ok": env_ok,
+        "service_restart_ok": svc_ok,
+        "note": " | ".join(note_bits),
+    }
+
+
+# ---------------------------------------------------------------------------
+# HTTPS (TLS) settings — panel-terminated TLS via panel.env
+# ---------------------------------------------------------------------------
+@router.get("/https-settings", status_code=status.HTTP_200_OK)
+def get_https_settings(
+    user: Annotated[dict, Depends(get_current_user)],
+    db: Session = Depends(get_db),  # noqa: B008  FastAPI idiom
+) -> dict[str, Any]:
+    """Report the panel's TLS state for the dashboard's HTTPS card.
+
+    ``cert_path``/``key_path`` come from the runtime env (panel.env via
+    panel.config.Settings) — falling back to the card's editable defaults
+    when unset, which is what pre-fills the form. ``*_exists`` flags let the
+    SPA show whether the files are currently on disk (they may not be
+    readable by the panel process — the POST preflight catches that).
+    """
+    _require_wizard_completed(db)
+    settings = get_settings()
+    # Echo paths as posix strings — they are Linux paths the operator typed,
+    # not host-filesystem objects of whatever box happens to run the tests.
+    cert = settings.tls_cert.as_posix() if settings.tls_cert else DEFAULT_TLS_CERT_PATH
+    key = settings.tls_key.as_posix() if settings.tls_key else DEFAULT_TLS_KEY_PATH
+    return {
+        "enabled": bool(settings.tls_cert and settings.tls_key),
+        "https_only": bool(settings.https_only),
+        "cert_path": cert,
+        "key_path": key,
+        "cert_exists": Path(cert).is_file(),
+        "key_exists": Path(key).is_file(),
+    }
+
+
+@router.post("/https-settings", status_code=status.HTTP_200_OK)
+def set_https_settings(
+    body: HttpsSettingsBody,
+    user: Annotated[dict, Depends(get_current_user)],
+    db: Session = Depends(get_db),  # noqa: B008  FastAPI idiom
+) -> dict[str, Any]:
+    """Enable or disable panel-terminated TLS and apply it via a restart.
+
+    Follows the same fail-safe ordering as ``change_panel_port``: validate
+    first, then rewrite panel.env, then trigger the detached restart. A
+    failure at any step leaves the panel bootable on its current config —
+    either nothing was written, or the env rewrite failed and the restart
+    never fires.
+
+    * both paths empty → disable (remove TLS lines, ``HTTPS_ONLY=false``).
+    * exactly one path → 400 (a half-pair would strand the panel at bind).
+    * both paths → preflight (exists / readable / pair loads) BEFORE any
+      write; an unreadable or mismatched pair is a 400 with nothing mutated.
+    """
+    _require_wizard_completed(db)
+    cert_in = body.cert_path.strip()
+    key_in = body.key_path.strip()
+
+    # ── Disable ────────────────────────────────────────────────────────────
+    if not cert_in and not key_in:
+        if not _panel_env_has_tls():
+            return {
+                "applied": False,
+                "enabled": False,
+                "note": "HTTPS is already disabled",
+            }
+        env_ok, env_detail = _update_panel_env_tls(None, None)
+        if not env_ok:
+            _log.warning("https-settings disable env rewrite failed: %s", env_detail)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"could not rewrite the panel env file, HTTPS not disabled. ({env_detail})",
+            )
+        svc_ok, svc_detail = _restart_panel_service("HTTPS-disable")
+        return {
+            "applied": True,
+            "enabled": False,
+            "env_rewrite_ok": env_ok,
+            "service_restart_ok": svc_ok,
+            "note": (
+                "HTTPS disabled — the panel is restarting over plain HTTP; "
+                "reload the dashboard when it comes back"
+                + (f" ({svc_detail})" if not svc_ok else "")
+            ),
+        }
+
+    # ── Enable ─────────────────────────────────────────────────────────────
+    if not cert_in or not key_in:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="both the public key path and the private key path are required",
+        )
+
+    settings = get_settings()
+    if (
+        settings.tls_cert
+        and settings.tls_key
+        and settings.tls_cert.as_posix() == cert_in
+        and settings.tls_key.as_posix() == key_in
+        and settings.https_only
+    ):
+        return {
+            "applied": False,
+            "enabled": True,
+            "cert_path": cert_in,
+            "key_path": key_in,
+            "note": "HTTPS is already enabled with these paths",
+        }
+
+    cert = Path(cert_in)
+    key = Path(key_in)
+
+    # Preflight BEFORE writing anything: a bad pair that slips through would
+    # crash uvicorn at bind on restart (Restart=on-abort does not retry a
+    # plain exit-1) and leave the panel unreachable on both schemes.
+    preflight_ok, preflight_detail = _tls_preflight(cert, key)
+    if not preflight_ok:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=preflight_detail,
+        )
+
+    env_ok, env_detail = _update_panel_env_tls(cert, key)
+    if not env_ok:
+        _log.warning("https-settings enable env rewrite failed: %s", env_detail)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=(
+                f"could not rewrite the panel env file, HTTPS not enabled. "
+                f"Nothing was changed. ({env_detail})"
+            ),
+        )
+    svc_ok, svc_detail = _restart_panel_service("HTTPS-enable")
+    note_bits = [
+        "HTTPS enabled — the panel is restarting with TLS; reopen "
+        "https://<host>:<port>/dashboard when it comes back",
+        f"panel.env TLS rewrite {'OK' if env_ok else 'FAILED'}"
+        + (f" — {env_detail}" if env_detail else ""),
+        f"systemctl restart psiphon-3x-ui.service {'OK' if svc_ok else 'FAILED'}"
+        + (f" — {svc_detail}" if svc_detail else ""),
+    ]
+    return {
+        "applied": True,
+        "enabled": True,
+        "cert_path": cert_in,
+        "key_path": key_in,
         "env_rewrite_ok": env_ok,
         "service_restart_ok": svc_ok,
         "note": " | ".join(note_bits),

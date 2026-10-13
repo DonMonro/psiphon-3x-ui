@@ -595,6 +595,28 @@
         </fieldset>
         <footer><button @click="changePanelPort()">Change port</button></footer>
       </article>
+      <article>
+        <header><strong>HTTPS (TLS)</strong>
+          <span x-show="tls.enabled" class="healthy-badge">https active</span>
+          <span x-show="!tls.enabled" class="inactive-badge">http only</span>
+        </header>
+        <p>Point the panel at a TLS certificate/key pair to serve the dashboard over HTTPS.
+           Both files must be readable by the panel's service user. Saving restarts the panel
+           service — reopen it via <code>https://<host>:<port></code> when it comes back.</p>
+        <fieldset :disabled="busy.tls">
+          <label>Public Key Path
+            <input type="text" x-model="tls.cert" placeholder="/root/cert/ip/fullchain.pem">
+          </label>
+          <label>Private Key Path
+            <input type="text" x-model="tls.key" placeholder="/root/cert/ip/privkey.pem">
+          </label>
+        </fieldset>
+        <p><small x-text="tls.status"></small></p>
+        <footer style="display:flex; gap:.6rem; justify-content:flex-end;">
+          <button class="outline" x-show="tls.enabled" @click="disableHttps()" :disabled="busy.tls">Disable HTTPS</button>
+          <button @click="applyHttps()" :disabled="busy.tls">Enable HTTPS</button>
+        </footer>
+      </article>
     </section>
       </div><!-- /.content -->
     </div><!-- /.layout -->
@@ -608,7 +630,7 @@
         section: "countries",
         countries: [],
         busy: { countries: false, ports: false, reapply: false, backup: false,
-                rotate: false, port: false, reclone: false, ping: "" },
+                rotate: false, port: false, reclone: false, ping: "", tls: false },
         // Phase 28 (item 3): per-country ping state.
         //   cooldown[code] — seconds remaining before Ping test unlocks. Set to
         //     10 when a country is enabled, so the operator has to wait for the
@@ -641,10 +663,16 @@
         restore: { result: null },
         rotate: { current: "", next: "" },
         port:   { new: 0 },
+        // HTTPS (TLS) card state. cert/key hold the operator-editable paths —
+        // pre-filled by loadHttpsStatus() with the server's current values
+        // (falling back to the /root/cert defaults) so an enable is a
+        // two-click operation when the certs are where the card expects them.
+        tls:    { cert: "", key: "", enabled: false, status: "" },
         toast:  { text: "", kind: "ok" },
 
         async init() {
           await this.refreshAll();
+          this.loadHttpsStatus();
         },
 
         _csrf: { token: "", fetched: false },
@@ -1129,6 +1157,68 @@
             this.notify(`network error: ${e.message}`, "err");
           } finally {
             this.busy.port = false;
+          }
+        },
+
+        // ---- HTTPS (TLS) card ------------------------------------------
+        // GET pre-fills the two path inputs with the server's current (or
+        // default) values and renders a one-line status: whether TLS is on
+        // and whether the configured files are currently on disk.
+        async loadHttpsStatus() {
+          try {
+            const r = await fetch("/api/dashboard/https-settings");
+            if (!r.ok) return;
+            const b = await r.json();
+            this.tls.cert = b.cert_path || "";
+            this.tls.key = b.key_path || "";
+            this.tls.enabled = !!b.enabled;
+            this.tls.status = b.enabled
+              ? `HTTPS is enabled — cert ${b.cert_exists ? "found" : "MISSING"} on disk.`
+              : "HTTPS is disabled (panel serves plain HTTP).";
+          } catch (e) { /* card stays blank — non-fatal */ }
+        },
+
+        async applyHttps() {
+          this.busy.tls = true;
+          try {
+            const r = await fetch("/api/dashboard/https-settings", {
+              method: "POST",
+              headers: {...(await this._csrfHeaders()), "Content-Type": "application/json"},
+              body: JSON.stringify({cert_path: this.tls.cert, key_path: this.tls.key}),
+            });
+            const body = await r.json();
+            if (r.ok) {
+              this.notify(body.note || "HTTPS settings saved");
+              await this.loadHttpsStatus();
+            } else {
+              this.notify(`enable HTTPS failed: ${body.detail || r.status}`, "err");
+            }
+          } catch (e) {
+            this.notify(`network error: ${e.message}`, "err");
+          } finally {
+            this.busy.tls = false;
+          }
+        },
+
+        async disableHttps() {
+          this.busy.tls = true;
+          try {
+            const r = await fetch("/api/dashboard/https-settings", {
+              method: "POST",
+              headers: {...(await this._csrfHeaders()), "Content-Type": "application/json"},
+              body: JSON.stringify({cert_path: "", key_path: ""}),
+            });
+            const body = await r.json();
+            if (r.ok) {
+              this.notify(body.note || "HTTPS disabled");
+              await this.loadHttpsStatus();
+            } else {
+              this.notify(`disable HTTPS failed: ${body.detail || r.status}`, "err");
+            }
+          } catch (e) {
+            this.notify(`network error: ${e.message}`, "err");
+          } finally {
+            this.busy.tls = false;
           }
         },
 
