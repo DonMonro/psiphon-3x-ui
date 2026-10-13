@@ -2475,3 +2475,129 @@ class TestHttpsSettingsPanel:
             json={"cert_path": "/etc/ssl/a.pem", "key_path": "/etc/ssl/b.pem"},
         )
         assert r.status_code in (401, 403), r.text
+
+    # ------------------------------------------------------------------
+    # Unreadable-path handling (the "Internal S..." 500 regression).
+    # pathlib's Path.is_file() swallows only ENOENT/ENOTDIR/EBADF/ELOOP —
+    # an EACCES from a parent the process cannot traverse (0700 /root, or
+    # the unit's ProtectHome masking) escapes as PermissionError. The
+    # operator's /root/cert/ip/*.pem defaults hit exactly that on a real
+    # Ubuntu host, which surfaced as a plain-text 500 that the SPA's
+    # r.json() reported as
+    #   network error: Unexpected token 'I', "Internal S" ... is not valid JSON
+    # Dev-box tests never see it: on Windows a stat of a missing path is a
+    # plain ENOENT, so these tests force the OSError instead of relying on
+    # host permissions.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _patch_stat_denied(monkeypatch, targets: tuple[str, ...]) -> None:
+        """Make pathlib.Path.is_file() raise PermissionError for *targets*.
+
+        Simulates an untraversable parent directory (/root on a real host)
+        across platforms — chmod 000 cannot express this on Windows.
+        """
+
+        import errno
+        from pathlib import Path, PurePosixPath
+
+        real_is_file = Path.is_file
+
+        def denied_is_file(self):
+            posix = PurePosixPath(self.as_posix())
+            if posix.as_posix() in targets or posix.name in targets:
+                raise PermissionError(errno.EACCES, "Operation not permitted", str(self))
+            return real_is_file(self)
+
+        monkeypatch.setattr(Path, "is_file", denied_is_file)
+
+    def test_get_with_unreadable_parent_returns_flags_not_500(self, monkeypatch, tmp_path):
+        """GET /https-settings must survive a stat EACCES on the cert paths.
+
+        Regression for the operator report: with the default /root/cert/ip
+        paths on a real host, the GET itself crashed with a plain-text 500
+        (PermissionError escaping the handler) on every dashboard load.
+        """
+        client = _client(monkeypatch, tmp_path)
+        _login(client)
+        self._patch_stat_denied(monkeypatch, ("fullchain.pem", "privkey.pem"))
+
+        r = client.get("/api/dashboard/https-settings")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        # Unknowable existence degrades to False — never a 500.
+        assert body["cert_exists"] is False
+        assert body["key_exists"] is False
+        assert body["enabled"] is False
+
+    def test_enable_with_unreadable_parent_is_400_not_500(self, monkeypatch, tmp_path):
+        """POST enable with an untraversable parent must be a structured 400.
+
+        The UN-stubbed _tls_preflight raises PermissionError from is_file()
+        when the parent dir is not traversable; before the fix that escaped
+        as a plain-text 500 (Starlette's 'Internal Server Error') and the SPA
+        showed 'Unexpected token I, Internal S ... is not valid JSON'.
+        Stub only env + restart (recording calls) — the real preflight runs.
+        """
+        client = _client(monkeypatch, tmp_path)
+        _login(client)
+        from panel.dashboard import router as dashboard_router
+
+        calls: list[tuple] = []
+        monkeypatch.setattr(
+            dashboard_router,
+            "_update_panel_env_tls",
+            lambda c, k: calls.append(("env", c, k)) or (True, "rewritten"),
+        )
+        monkeypatch.setattr(
+            dashboard_router,
+            "_restart_panel_service",
+            lambda reason="port-change": calls.append(("restart", reason)) or (True, ""),
+        )
+        self._patch_stat_denied(monkeypatch, ("x.pem", "y.pem"))
+
+        r = client.post(
+            "/api/dashboard/https-settings",
+            json={"cert_path": "/root/cert/x.pem", "key_path": "/root/cert/y.pem"},
+        )
+        assert r.status_code == 400, r.text
+        detail = r.json()["detail"]
+        assert "cannot be checked" in detail
+        assert "ProtectHome" in detail, detail
+        assert calls == [], "a preflight failure must never reach env/restart"
+
+    def test_enable_with_real_files_in_accessible_dir_hits_load_check(self, monkeypatch, tmp_path):
+        """Guard the fix's blast radius: a genuinely readable pair still runs
+        the UN-stubbed preflight end-to-end (exists → readable → ssl load),
+        proving the PermissionError handling did not loosen the preflight
+        into accepting garbage pairs."""
+        client = _client(monkeypatch, tmp_path)
+        _login(client)
+        from panel.dashboard import router as dashboard_router
+
+        calls: list[tuple] = []
+        monkeypatch.setattr(
+            dashboard_router,
+            "_update_panel_env_tls",
+            lambda c, k: calls.append(("env", c, k)) or (True, "rewritten"),
+        )
+        monkeypatch.setattr(
+            dashboard_router,
+            "_restart_panel_service",
+            lambda reason="port-change": calls.append(("restart", reason)) or (True, ""),
+        )
+
+        cert = tmp_path / "fullchain.pem"
+        key = tmp_path / "privkey.pem"
+        cert.write_bytes(b"not-a-real-cert-but-exists\n")
+        key.write_bytes(b"not-a-real-key-but-exists\n")
+
+        r = client.post(
+            "/api/dashboard/https-settings",
+            json={"cert_path": cert.as_posix(), "key_path": key.as_posix()},
+        )
+        # The pair exists and is readable but is not a valid cert/key — the
+        # preflight must still reject it with a 400 (load failure), not 500.
+        assert r.status_code == 400, r.text
+        assert "failed to load" in r.json()["detail"]
+        assert calls == []

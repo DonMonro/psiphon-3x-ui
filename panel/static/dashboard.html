@@ -698,6 +698,22 @@
           return token ? {"X-CSRF-Token": token} : {};
         },
 
+        // Read a fetch Response as JSON, tolerating non-JSON bodies. The
+        // backend's structured failures are always {"detail": ...} (400/403/
+        // 502), but an UNHANDLED server exception is Starlette's plain-text
+        // "Internal Server Error" — and a bare `r.json()` on that throws
+        // SyntaxError, masking the real status as
+        // "network error: Unexpected token 'I', "Internal S" ...". Parse
+        // defensively and surface the status either way.
+        async _readBody(r) {
+          const text = await r.text();
+          try {
+            return JSON.parse(text);
+          } catch (e) {
+            return {detail: text || `HTTP ${r.status}`};
+          }
+        },
+
         async refreshAll() {
           this.busy.countries = true;
           try {
@@ -1168,7 +1184,7 @@
           try {
             const r = await fetch("/api/dashboard/https-settings");
             if (!r.ok) return;
-            const b = await r.json();
+            const b = await this._readBody(r);
             this.tls.cert = b.cert_path || "";
             this.tls.key = b.key_path || "";
             this.tls.enabled = !!b.enabled;
@@ -1186,7 +1202,7 @@
               headers: {...(await this._csrfHeaders()), "Content-Type": "application/json"},
               body: JSON.stringify({cert_path: this.tls.cert, key_path: this.tls.key}),
             });
-            const body = await r.json();
+            const body = await this._readBody(r);
             if (r.ok) {
               this.notify(body.note || "HTTPS settings saved");
               await this.loadHttpsStatus();
@@ -1208,7 +1224,7 @@
               headers: {...(await this._csrfHeaders()), "Content-Type": "application/json"},
               body: JSON.stringify({cert_path: "", key_path: ""}),
             });
-            const body = await r.json();
+            const body = await this._readBody(r);
             if (r.ok) {
               this.notify(body.note || "HTTPS disabled");
               await this.loadHttpsStatus();

@@ -441,6 +441,40 @@ def _update_panel_env_port(new_port: int) -> tuple[bool, str]:
 DEFAULT_TLS_CERT_PATH = "/root/cert/ip/fullchain.pem"
 DEFAULT_TLS_KEY_PATH = "/root/cert/ip/privkey.pem"
 
+# Shared remediation tail for every HTTPS preflight failure whose root cause
+# is "the panel process cannot read that path". Two layers can produce it:
+# plain filesystem permissions (a 0700 root-only parent) and the unit's
+# ProtectHome=true sandbox, which makes /root, /home and /run/user empty and
+# inaccessible REGARDLESS of chmod — so "just chgrp it" is wrong advice for
+# anything under /root, the card's own prefill defaults included.
+_TLS_READ_REMEDIATION = (
+    "The panel service runs as the unprivileged psiphon3xui user and its "
+    "systemd unit sets ProtectHome=true, so files under /root, /home or "
+    "/run/user are unreadable no matter how they are chmod'ed. Copy the pair "
+    "somewhere the service can read instead, e.g. `install -d -o root -g "
+    "psiphon3xui -m 0750 /opt/psiphon-3x-ui/tls && install -o root -g "
+    "psiphon3xui -m 0640 <cert> <key> /opt/psiphon-3x-ui/tls/`, then enter "
+    "those paths here."
+)
+
+
+def _safe_is_file(p: Path) -> bool:
+    """OSError-proof :meth:`pathlib.Path.is_file`.
+
+    pathlib's ``is_file`` swallows ONLY ENOENT/ENOTDIR/EBADF/ELOOP — a stat
+    against a parent directory the process cannot traverse (EACCES) escapes
+    as ``PermissionError``. That bit the HTTPS card: its prefill defaults
+    live under ``/root`` (0700 root:root, and masked outright by the unit's
+    ProtectHome), so the GET's existence flags crashed with a plain-text
+    500 on any real Ubuntu host. Used wherever existence is merely
+    *reported*; the POST preflight needs the detailed error and handles
+    OSError itself.
+    """
+    try:
+        return p.is_file()
+    except OSError:
+        return False
+
 
 def _tls_preflight(cert: Path, key: Path) -> tuple[bool, str]:
     """Verify a TLS cert/key pair is usable BEFORE panel.env is rewritten.
@@ -450,15 +484,25 @@ def _tls_preflight(cert: Path, key: Path) -> tuple[bool, str]:
     does NOT retry a plain exit-1, so the panel would be gone from its port
     with no in-band way back. Checks, in order:
 
-    1. both files exist;
+    1. both files exist (and are visible to THIS process — an untraversable
+       parent directory like 0700 /root makes even existence unknowable, so
+       that failure is reported here, not as a 500);
     2. both are readable by THIS (unprivileged) process — the common failure
        is certs under ``/root/`` that only root can traverse;
     3. the pair actually loads as a TLS cert chain (openssl-grade validation
        without shelling out).
     """
     for label, p in (("public key", cert), ("private key", key)):
-        if not p.is_file():
-            return False, f"{label} not found at {p}"
+        try:
+            if not p.is_file():
+                return False, f"{label} not found at {p}"
+        except OSError as exc:
+            # EACCES on a parent directory (e.g. /root) is PermissionError —
+            # pathlib only swallows ENOENT/ENOTDIR/EBADF/ELOOP.
+            return False, (
+                f"{label} at {p} cannot be checked ({type(exc).__name__}: {exc}). "
+                f"{_TLS_READ_REMEDIATION}"
+            )
     for label, p in (("public key", cert), ("private key", key)):
         try:
             with open(p, "rb") as fh:
@@ -466,10 +510,7 @@ def _tls_preflight(cert: Path, key: Path) -> tuple[bool, str]:
         except OSError as exc:
             return False, (
                 f"{label} at {p} is not readable by the panel process "
-                f"({type(exc).__name__}: {exc}). Fix permissions/ownership "
-                f"(e.g. chgrp + chmod g+r, and make the parent directories "
-                f"traversable) or move the files somewhere the psiphon3xui "
-                f"user can read."
+                f"({type(exc).__name__}: {exc}). {_TLS_READ_REMEDIATION}"
             )
     try:
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -2193,8 +2234,11 @@ def get_https_settings(
         "https_only": bool(settings.https_only),
         "cert_path": cert,
         "key_path": key,
-        "cert_exists": Path(cert).is_file(),
-        "key_exists": Path(key).is_file(),
+        # _safe_is_file: a parent dir the panel user cannot traverse (0700
+        # /root — the prefill defaults' home) makes pathlib's plain is_file()
+        # raise PermissionError → plain-text 500 on every card load.
+        "cert_exists": _safe_is_file(Path(cert)),
+        "key_exists": _safe_is_file(Path(key)),
     }
 
 
@@ -2272,8 +2316,17 @@ def set_https_settings(
             "note": "HTTPS is already enabled with these paths",
         }
 
-    cert = Path(cert_in)
-    key = Path(key_in)
+    # Path() raises ValueError on embedded NULs (a pasted-garbage path) —
+    # coerce that to the same 400 shape as every other bad input rather
+    # than an unhandled plain-text 500.
+    try:
+        cert = Path(cert_in)
+        key = Path(key_in)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"invalid path: {exc}",
+        ) from exc
 
     # Preflight BEFORE writing anything: a bad pair that slips through would
     # crash uvicorn at bind on restart (Restart=on-abort does not retry a
