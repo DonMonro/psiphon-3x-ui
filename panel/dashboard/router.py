@@ -443,18 +443,22 @@ DEFAULT_TLS_KEY_PATH = "/root/cert/ip/privkey.pem"
 
 # Shared remediation tail for every HTTPS preflight failure whose root cause
 # is "the panel process cannot read that path". Two layers can produce it:
-# plain filesystem permissions (a 0700 root-only parent) and the unit's
-# ProtectHome=true sandbox, which makes /root, /home and /run/user empty and
-# inaccessible REGARDLESS of chmod — so "just chgrp it" is wrong advice for
-# anything under /root, the card's own prefill defaults included.
+# plain filesystem permissions (provisioning tools write privkey.pem 0600
+# root:root) and the unit's ProtectHome=tmpfs sandbox, which bind-mounts ONLY
+# /root/cert into the service namespace and masks the rest of /root, /home
+# and /run/user entirely — so a pair kept under /root/cert just needs the
+# chmod, while a pair anywhere else under /root genuinely must move.
 _TLS_READ_REMEDIATION = (
-    "The panel service runs as the unprivileged psiphon3xui user and its "
-    "systemd unit sets ProtectHome=true, so files under /root, /home or "
-    "/run/user are unreadable no matter how they are chmod'ed. Copy the pair "
-    "somewhere the service can read instead, e.g. `install -d -o root -g "
-    "psiphon3xui -m 0750 /opt/psiphon-3x-ui/tls && install -o root -g "
-    "psiphon3xui -m 0640 <cert> <key> /opt/psiphon-3x-ui/tls/`, then enter "
-    "those paths here."
+    "The panel service runs as the unprivileged psiphon3xui user behind the "
+    "unit's ProtectHome sandbox: the service can see ONLY the /root/cert "
+    "directory (read-only bind mount) — the rest of /root, /home and "
+    "/run/user are masked. If the pair lives under /root/cert, make the "
+    "tree readable: `sudo chmod -R a+rX /root/cert` (safe — /root itself "
+    "stays 0700 root-only, so no other host user can traverse to it; cert "
+    "renewals re-write privkey.pem as 0600, so re-run the chmod after each "
+    "renewal). If the pair lives anywhere else under /root, move it into "
+    "/root/cert (e.g. /root/cert/ip/fullchain.pem + privkey.pem) or to "
+    "/opt/psiphon-3x-ui/tls/, then enter that path here."
 )
 
 

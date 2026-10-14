@@ -186,11 +186,21 @@ signing, IP allowlists.
 
 The panel serves plain HTTP by default and is not prompted for TLS at install
 time. The recommended setup is [Caddy](https://caddyserver.com/) on 443
-reverse-proxying to the panel port, which handles Let's Encrypt for you. To
-terminate TLS in the panel itself, set `PSIPHON3XUI_TLS_CERT`,
-`PSIPHON3XUI_TLS_KEY`, and `PSIPHON3XUI_HTTPS_ONLY=true` in
-`/opt/psiphon-3x-ui/panel.env` and restart the service; that also flips the
-`Secure` flag on the session and CSRF cookies.
+reverse-proxying to the panel port, which handles Let's Encrypt for you.
+
+To terminate TLS in the panel itself, use the dashboard's **Settings →
+HTTPS (TLS)** card: enter the fullchain + private-key paths and click
+Enable — the panel rewrites its env file and restarts with TLS (also
+flipping the `Secure` flag on the session and CSRF cookies). The default
+paths point at `/root/cert/ip/`: the panel unit bind-mounts `/root/cert`
+read-only into its namespace, and the installer makes that tree readable
+(`chmod -R a+rX /root/cert`) — re-run the installer (or the chmod by hand)
+after each cert renewal, since renewals rewrite the private key as
+root-only. Certs stored anywhere else under `/root` are not visible to the
+service; move them under `/root/cert` or to `/opt/psiphon-3x-ui/tls/`.
+(Equivalently, set `PSIPHON3XUI_TLS_CERT`, `PSIPHON3XUI_TLS_KEY`, and
+`PSIPHON3XUI_HTTPS_ONLY=true` in `/opt/psiphon-3x-ui/panel.env` by hand and
+restart.)
 
 ---
 

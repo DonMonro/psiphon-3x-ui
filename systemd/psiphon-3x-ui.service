@@ -50,7 +50,22 @@ Group=psiphon3xui
 # Hardening
 NoNewPrivileges=true
 ProtectSystem=strict
-ProtectHome=true
+# ProtectHome=tmpfs (NOT =true): both modes mask /home, /root and /run/user,
+# but =true is implemented as InaccessiblePaths — and systemd REFUSES to nest
+# a BindPaths=/BindReadOnlyPaths= carve-out inside an InaccessiblePaths mask.
+# =tmpfs (TemporaryFileSystem= with :ro) is the documented mode that leaves
+# the namespace open to the read-only /root/cert bind below, which is what
+# lets the dashboard's HTTPS card read a cert pair kept at its default
+# /root/cert/... location without the operator copying it elsewhere.
+ProtectHome=tmpfs
+# Read-only bind of the operator's cert directory (the HTTPS card pre-fills
+# /root/cert/ip/fullchain.pem + privkey.pem). The leading "-" makes systemd
+# ignore this line when the directory does not exist (fresh installs).
+# DAC perms still apply inside the bind: the pair must be readable by the
+# service user (chmod -R a+rX /root/cert) — and that is safe, because host
+# users still cannot traverse 0700 /root to reach the subtree; only this
+# unit sees it, read-only, through its own namespace.
+BindReadOnlyPaths=-/root/cert
 PrivateTmp=true
 ReadWritePaths=/opt/psiphon-3x-ui
 # Allowing bind to the admin-chosen panel port across the high range:

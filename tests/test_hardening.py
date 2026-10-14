@@ -6639,3 +6639,119 @@ class TestPhase28DashboardActions:
             ":disabled attribute alone is bypassable and the countdown state "
             "can race a toggle."
         )
+
+
+# ---------------------------------------------------------------------------
+# Phase 30 — HTTPS card reads the operator's real cert pair in place.
+# The card pre-fills /root/cert/ip/fullchain.pem + privkey.pem, but the panel
+# service runs as the unprivileged psiphon3xui user behind ProtectHome —
+# under =true that masks ALL of /root, forcing the operator to copy the pair
+# elsewhere just to point the panel at it. The fix binds ONLY /root/cert
+# into the unit's namespace (ProtectHome=tmpfs + BindReadOnlyPaths=-/root/cert
+# — the documented pairing: =true is implemented as InaccessiblePaths and
+# systemd refuses to nest bind carve-outs inside it, while =tmpfs explicitly
+# supports BindPaths=/BindReadOnlyPaths=) and the installer chmods the tree
+# readable. /root itself stays 0700 root-only, so the a+rX bits are visible
+# only through the unit's private read-only bind — no other host user can
+# traverse /root to reach them.
+# ---------------------------------------------------------------------------
+class TestHttpsCertInPlaceAccess:
+    """Static-source pins for the in-place /root/cert access path."""
+
+    _REPO_ROOT = Path(__file__).resolve().parents[1]
+    _PANEL_UNIT = _REPO_ROOT / "systemd" / "psiphon-3x-ui.service"
+    _PANEL_INSTALL_SH = _REPO_ROOT / "installer" / "panel_install.sh"
+
+    def _unit_no_comments(self) -> str:
+        import re  # noqa: PLC0415
+
+        return re.sub(r"#[^\n]*", "", self._PANEL_UNIT.read_text(encoding="utf-8"))
+
+    def test_panel_unit_binds_root_cert_readonly(self):
+        """The panel unit MUST bind-mount /root/cert read-only into its
+        namespace (with the '-' ignore-if-missing prefix so fresh installs
+        without the directory still boot)."""
+        import re  # noqa: PLC0415
+
+        text = self._unit_no_comments()
+        assert re.search(
+            r"^[ \t]*BindReadOnlyPaths=-/root/cert[ \t]*$",
+            text,
+            flags=re.MULTILINE,
+        ), (
+            "systemd/psiphon-3x-ui.service MUST carry a bare "
+            "`BindReadOnlyPaths=-/root/cert` directive: the HTTPS card's "
+            "default cert paths live under /root/cert and the panel service "
+            "(unprivileged psiphon3xui user) otherwise cannot see them at "
+            "all. The '-' prefix keeps fresh installs (no /root/cert yet) "
+            "booting. Read-only on purpose — the panel must never be able "
+            "to write the operator's key material."
+        )
+
+    def test_panel_unit_uses_protecthome_tmpfs_not_true(self):
+        """ProtectHome MUST be tmpfs, NOT true.
+
+        =true is implemented as InaccessiblePaths= — and systemd refuses to
+        nest BindPaths=/BindReadOnlyPaths= inside an InaccessiblePaths mask,
+        so the /root/cert bind would simply never appear (=true would
+        silently break the HTTPS card's default paths AND fail the unit at
+        start with a mount-ordering error on some systemd builds). =tmpfs
+        is the documented mode under which bind carve-outs are supported.
+        """
+        import re  # noqa: PLC0415
+
+        text = self._unit_no_comments()
+        assert re.search(
+            r"^[ \t]*ProtectHome=tmpfs[ \t]*$",
+            text,
+            flags=re.MULTILINE,
+        ), (
+            "systemd/psiphon-3x-ui.service MUST carry a bare "
+            "`ProtectHome=tmpfs` directive (NOT =true): BindReadOnlyPaths "
+            "carve-outs under /root are only supported under the tmpfs "
+            "variant (=true ≙ InaccessiblePaths, which cannot be nested "
+            "into). Without tmpfs the /root/cert bind never materialises "
+            "and the HTTPS card's default paths are unreadable again."
+        )
+        assert not re.search(
+            r"^[ \t]*ProtectHome=true[ \t]*$",
+            text,
+            flags=re.MULTILINE,
+        ), (
+            "systemd/psiphon-3x-ui.service MUST NOT carry a bare "
+            "`ProtectHome=true` directive: it re-masks /root entirely and "
+            "conflicts with the BindReadOnlyPaths=-/root/cert carve-out "
+            "(systemd refuses binds nested inside InaccessiblePaths)."
+        )
+
+    def test_installer_chmods_root_cert_readable_when_present(self):
+        """The installer MUST chmod /root/cert (recursively, a+rX) when the
+        directory exists — cert provisioning tools write privkey.pem as
+        0600 root:root, and DAC still applies inside the bind mount. The
+        chmod is safe: /root itself stays 0700 root-only, so no host user
+        can traverse to /root/cert; only the panel unit's read-only bind
+        benefits from the readable bits."""
+        import re  # noqa: PLC0415
+
+        text = self._PANEL_INSTALL_SH.read_text(encoding="utf-8")
+        no_comments = re.sub(r"#[^\n]*", "", text)
+        assert re.search(
+            r"chmod\s+-R\s+a\+rX\s+/root/cert\b",
+            no_comments,
+        ), (
+            "installer/panel_install.sh MUST run `chmod -R a+rX /root/cert` "
+            "(guarded by an existence check) so the panel unit's read-only "
+            "/root/cert bind can actually read the pair — provisioning "
+            "tools write privkey.pem 0600 root:root. The guard must be "
+            "`[[ -d /root/cert ]]` so the chmod is skipped on hosts that "
+            "keep their certs elsewhere."
+        )
+        assert re.search(
+            r"\[\[\s+-d\s+/root/cert\s+\]\]",
+            no_comments,
+        ), (
+            "The `chmod -R a+rX /root/cert` call MUST be guarded by "
+            "`[[ -d /root/cert ]]` — running it unconditionally would fail "
+            "the install on hosts without that directory (chmod exits "
+            "non-zero) and needlessly touch hosts that keep certs elsewhere."
+        )

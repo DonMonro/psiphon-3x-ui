@@ -601,8 +601,10 @@
           <span x-show="!tls.enabled" class="inactive-badge">http only</span>
         </header>
         <p>Point the panel at a TLS certificate/key pair to serve the dashboard over HTTPS.
-           Both files must be readable by the panel's service user. Saving restarts the panel
-           service — reopen it via <code>https://<host>:<port></code> when it comes back.</p>
+           The default <code>/root/cert/...</code> paths work if the installer ran its
+           <code>chmod -R a+rX /root/cert</code> (re-run it after each cert renewal — renewals
+           rewrite the private key as root-only). Saving restarts the panel service — reopen it
+           via <code>https://<host>:<port></code> when it comes back.</p>
         <fieldset :disabled="busy.tls">
           <label>Public Key Path
             <input type="text" x-model="tls.cert" placeholder="/root/cert/ip/fullchain.pem">

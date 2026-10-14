@@ -521,6 +521,23 @@ EOF
     install -d -m 2775 -o root -g "${PSIPHON3XUI_GROUP}" "/opt/psiphon-3x-ui" \
         || warn "mkdir /opt/psiphon-3x-ui failed (continuing)."
 
+    # ── 7d. HTTPS card: make /root/cert readable by the panel (if present) ──
+    # The panel unit (systemd/psiphon-3x-ui.service) bind-mounts /root/cert
+    # read-only into the service's namespace (ProtectHome=tmpfs keeps the
+    # REST of /root masked). DAC still applies inside the bind, and cert
+    # provisioning tools (certbot / acme.sh) typically write privkey.pem as
+    # 0600 root:root, so make the tree readable. Safe: /root itself stays
+    # 0700 root:root, so no host user can traverse to /root/cert — the a+rX
+    # bits are only meaningful to this unit's read-only bind. Idempotent;
+    # non-fatal (the HTTPS card's preflight reports a precise 400 if the
+    # perms are wrong, with the same chmod as the fix). NOTE: a cert RENEWAL
+    # re-writes privkey.pem 0600 — re-run install.sh (or chmod by hand) then.
+    if [[ -d /root/cert ]]; then
+        chmod -R a+rX /root/cert \
+            || warn "Could not chmod /root/cert readable — the HTTPS card will reject the pair (preflight explains the fix)."
+        ok "/root/cert made readable for the panel service (read-only bind)."
+    fi
+
     # ── 8. Pre-flight: ensure PANEL_PORT is free for the new unit ──
     # Phase 24 Hotfix #2 (Bug: "Failed to restart psiphon-3x-ui.service:
     # Unit psiphon-3x-ui.service not found." + downstream "SOCKS5 health
