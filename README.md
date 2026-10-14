@@ -1,5 +1,7 @@
 # Psiphon-3X-UI
 
+![Psiphon-3X-UI — Country-Specific Internet Egress for 3x-ui](media/banner.webp)
+
 > Per-country egress for [3x-ui](https://github.com/MHSanaei/3x-ui), powered by
 > [Psiphon](https://github.com/Psiphon-Labs/psiphon-tunnel-core).
 
@@ -40,6 +42,14 @@ A SQLite database (`panel.db`) is the source of truth mapping country ↔ port p
 ↔ cloned inbound id. 33 Psiphon egress regions ship in
 [`panel/data/countries.yaml`](panel/data/countries.yaml) and the list is editable
 without code changes.
+
+> [!IMPORTANT]
+> **A country's exit depends on Psiphon's server network, not on this panel.**
+> Servers in any given country may not always be functional or available — that
+> depends entirely on the status of Psiphon's servers in that region at the time.
+> If a country's egress is down or traffic exits elsewhere, the tunnel may be
+> falling back to a nearby region; check the per-country **Ping** test and journal
+> from the dashboard, and retry later.
 
 ---
 
