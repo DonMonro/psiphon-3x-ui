@@ -231,7 +231,7 @@ _remove_stale_sudoers_dropin() {
 run_uninstall() {
     echo "${COLOR_INFO}== Psiphon-3X-UI uninstaller ==${COLOR_RESET}"
     warn "This will STOP and remove the psiphon-3x-ui service and the ${INSTALL_PREFIX} tree."
-    warn "3x-ui entries created by this panel (inbounds, outbounds, routing rules) will be removed automatically."
+    warn "Cleanup of this panel's 3x-ui entries will be attempted using its saved 3x-ui link."
     printf '%sType "yes" to confirm: %s' "${COLOR_WARN}" "${COLOR_RESET}"
     local confirm
     read -r confirm || confirm=""
@@ -339,7 +339,7 @@ run_uninstall() {
     fi
 
     rm -rf "${INSTALL_PREFIX}"
-    ok "Psiphon-3X-UI uninstalled (3x-ui itself is untouched; entries this panel created were removed)."
+    ok "Psiphon-3X-UI uninstalled (3x-ui itself is untouched; see the cleanup result above for panel-created entries)."
     exit 0
 }
 
@@ -349,37 +349,62 @@ run_uninstall() {
 # call without sourcing panel_install.sh's port_listeners() — they use a
 # cheap inline `ss -tlnp | awk` snapshot plus `pgrep -u <user>`.
 _purge_orphan_panel_listeners() {
-    local pids=""
-    # Same shape as panel_install.sh's port_listeners(): "PID COMMAND"
+    # --uninstall bypasses run_prompt, so PANEL_PORT is never initialized.
+    # Read only the persisted port, without sourcing secrets into this shell
+    # or guessing a default that may now belong to another service.
+    local port="" pids="" panel_uid owner pid
+    if [[ -r "${ENV_FILE}" ]]; then
+        port="$(awk '
+            /^[[:space:]]*PSIPHON3XUI_PORT[[:space:]]*=/ {
+                sub(/^[^=]*=/, ""); value=$0
+            }
+            END {
+                gsub(/^[[:space:]"\047]+|[[:space:]"\047]+$/, "", value)
+                print value
+            }
+        ' "${ENV_FILE}" 2>/dev/null || true)"
+    fi
+    if [[ ! "${port}" =~ ^[0-9]{1,5}$ ]] || (( 10#${port} < 1 || 10#${port} > 65535 )); then
+        warn "No valid panel port in ${ENV_FILE} — listener purge skipped; panel-user cleanup will still run."
+        return 0
+    fi
+    port="$((10#${port}))"
     if ! command -v ss >/dev/null 2>&1; then
         warn "ss not found — orphan listener purge skipped (install iproute2)."
         return 0
     fi
-    while IFS= read -r pidcmd; do
-        local pid="${pidcmd%% *}"
-        [[ -n "${pid}" ]] || continue
+    panel_uid="$(id -u "${PSIPHON3XUI_USER}" 2>/dev/null)" || return 0
+    while IFS= read -r pid; do
+        [[ "${pid}" =~ ^[0-9]+$ ]] || continue
+        # A listener on the saved port is not necessarily ours. Restrict
+        # removal to the dedicated service account, as the user purge does.
+        owner="$(ps -o uid= -p "${pid}" 2>/dev/null || true)"
+        owner="${owner//[[:space:]]/}"
+        if [[ "${owner}" != "${panel_uid}" ]]; then
+            warn "Leaving PID ${pid} on TCP/${port}: it is not owned by ${PSIPHON3XUI_USER}."
+            continue
+        fi
         pids="${pids:+${pids} }${pid}"
-    done < <(ss -tlnp 2>/dev/null | awk -v port=":${PANEL_PORT}" '
-        $1 == "LISTEN" && $4 == port {
+    done < <(ss -tlnp 2>/dev/null | awk -v port="${port}" '
+        $1 == "LISTEN" && $4 ~ (":" port "$") {
             line = $0
-            sub(/.*users:\(\("/, "", line)
-            prog = line; sub(/".*/, "", prog)
-            pid  = line; sub(/.*pid=/, "", pid); sub(/[,) ].*/, "", pid)
-            if (pid != "") print pid " " prog
+            while (match(line, /pid=[0-9]+/)) {
+                print substr(line, RSTART + 4, RLENGTH - 4)
+                line = substr(line, RSTART + RLENGTH)
+            }
         }
     ')
     if [[ -n "${pids}" ]]; then
-        warn "Killing orphan panel listener(s) holding TCP/${PANEL_PORT} (PIDs: ${pids}) …"
+        warn "Killing orphan panel listener(s) holding TCP/${port} (PIDs: ${pids}) …"
         # shellcheck disable=SC2086  # intentional word-splitting of pid list
         kill -9 ${pids} 2>/dev/null || true
         sleep 1
-        if ss -tlnp 2>/dev/null | awk -v port=":${PANEL_PORT}" '
-            $1 == "LISTEN" && $4 == port { found=1 } END { exit !found }
+        if ss -tlnp 2>/dev/null | awk -v port="${port}" '
+            $1 == "LISTEN" && $4 ~ (":" port "$") { found=1 } END { exit !found }
         '; then
-            warn "TCP/${PANEL_PORT} is STILL held after kill -9; the next install's \
-pre-flight will retry — or free it manually with 'sudo fuser -k ${PANEL_PORT}/tcp'."
+            warn "TCP/${port} is still in use; identify the remaining listener before reinstalling."
         else
-            ok "Orphan panel listener(s) on TCP/${PANEL_PORT} cleared."
+            ok "Orphan panel listener(s) on TCP/${port} cleared."
         fi
     fi
 }

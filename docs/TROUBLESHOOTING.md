@@ -51,6 +51,19 @@ Then re-run `sudo bash /path/to/install.sh` (idempotent — it will rebuild).
   `Settings` row — a fresh `--password` will replace the bcrypt hash) or
   `${VENV_DIR}/bin/python -m panel.seed --port ... --user ... --password ...` directly.
 
+### Uninstall reports `PANEL_PORT: unbound variable`
+
+Older uninstall code used a variable populated only by the installation
+prompts. The updated uninstaller reads the saved port from `panel.env` and
+checks the listener's service account before stopping it.
+
+`3x-ui cleanup SKIPPED: no 3x-ui link recorded in panel.db` is a separate
+message: that database has no saved 3x-ui connection record. Cleanup cannot
+use a record erased by an earlier uninstall. If entries remain, review and
+remove only the panel-created entries in 3x-ui. The old final success message
+incorrectly claimed those entries were removed even when cleanup was skipped;
+the updated message refers to the actual cleanup result.
+
 ### Changing the panel port from Settings (Phase 29)
 
 `POST /api/settings/panel-port` does three things, in this order: refuse
