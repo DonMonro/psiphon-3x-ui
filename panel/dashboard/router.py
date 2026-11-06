@@ -12,7 +12,9 @@ has ``wizard_completed == True``. It lets the operator:
 * idempotently re-apply the entire wizard state (rewrite every country
   config + restart every unit + re-clone every 3x-ui inbound);
 * export/restore ``panel.db`` and ``config/*.json`` (backup/restore);
-* rotate the admin password and change the panel port (persisted to
+* change the admin username (current password re-verified) and rotate the
+  admin password;
+* change the panel port (persisted to
   panel.db + panel.env, then applied by restarting the service).
 
 All handlers require a valid session cookie (see
@@ -724,6 +726,21 @@ class RotatePasswordBody(BaseModel):
     current_password: str = Field(..., description="current admin password (re-verify)")
     new_password: str = Field(
         ..., min_length=8, max_length=128, description="new admin password (>=8 chars)"
+    )
+
+
+class ChangeUsernameBody(BaseModel):
+    """``POST /api/dashboard/change-username`` body."""
+
+    current_password: str = Field(
+        ..., description="current admin password (re-verify, mirrors rotate-password)"
+    )
+    new_username: str = Field(
+        ...,
+        min_length=3,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9_.-]+$",
+        description="new admin login username (3-64 chars, URL/path-safe)",
     )
 
 
@@ -2008,8 +2025,53 @@ async def restore(
 
 
 # ---------------------------------------------------------------------------
-# Rotate admin password + change panel port
+# Admin credentials: change username + rotate password
 # ---------------------------------------------------------------------------
+@router.get("/username", status_code=status.HTTP_200_OK)
+def get_username(
+    user: Annotated[dict, Depends(get_current_user)],
+    db: Session = Depends(get_db),  # noqa: B008  FastAPI idiom
+) -> dict[str, Any]:
+    """Return the current admin username (pre-fills the settings card)."""
+    _require_wizard_completed(db)
+    settings = db.get(Settings, {"id": 1})
+    if settings is None:  # pragma: no cover — _require_wizard_completed guards
+        raise HTTPException(status_code=503, detail="panel not initialised")
+    return {"username": settings.admin_user}
+
+
+@router.post("/change-username", status_code=status.HTTP_200_OK)
+def change_username(
+    body: ChangeUsernameBody,
+    user: Annotated[dict, Depends(get_current_user)],
+    db: Session = Depends(get_db),  # noqa: B008  FastAPI idiom
+) -> dict[str, Any]:
+    """Change the admin login username.
+
+    Re-verifies ``current_password`` before writing, so a leaked session
+    cookie alone can't rename the account. The session cookie payload is
+    ``{"sub": <username>}`` and the login endpoint compares against
+    ``Settings.admin_user`` — both pick up the new name on their next
+    use, so no service restart is needed. The current session stays valid:
+    its signature doesn't embed the username, only its payload does.
+    """
+    _require_wizard_completed(db)
+    settings = db.get(Settings, {"id": 1})
+    if settings is None:  # pragma: no cover — _require_wizard_completed guards
+        raise HTTPException(status_code=503, detail="panel not initialised")
+    if not verify_password(body.current_password, settings.admin_pass_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="current password does not match",
+        )
+    if body.new_username == settings.admin_user:
+        return {"changed": False, "username": settings.admin_user}
+    settings.admin_user = body.new_username
+    db.add(settings)
+    db.commit()
+    return {"changed": True, "username": body.new_username}
+
+
 @router.post("/rotate-password", status_code=status.HTTP_200_OK)
 def rotate_password(
     body: RotatePasswordBody,

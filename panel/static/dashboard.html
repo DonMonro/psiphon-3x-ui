@@ -200,6 +200,7 @@
       /* Standard sign-in-card width — keeps text boxes from stretching to
          the full width of the (now full-bleed) panel. */
       max-width: 22rem;
+      height: 2.75rem; padding: 0 .9rem;
       transition: border-color .15s ease, box-shadow .15s ease;
     }
     input::placeholder { color: rgba(154,163,178,.55); }
@@ -218,6 +219,28 @@
     }
     fieldset { border: 1px solid var(--no-hairline); border-radius: 12px;
                background: rgba(255,255,255,.015); }
+    .username-fields > label > input { display: block; }
+    /* Password fields with an inline show/hide eye toggle: the button is
+       absolutely positioned INSIDE the input's right edge, so the input gets
+       matching right padding to keep the masked text clear of the icon.
+       The button is pinned to the INPUT's own box (top:0 + the input's
+       2.75rem height), NOT stretched over the wrapper: the wrapper is a line
+       box around an inline-block input, so it is a few px TALLER than the
+       input (descender slack below) — a button centred on the wrapper
+       therefore sat visibly low against the input it overlaps. Keep the
+       height here in sync with the input height rule above. */
+    .pw-wrap { position: relative; display: block; max-width: 22rem; }
+    .pw-wrap input { width: 100%; max-width: none; padding-right: 2.75rem; }
+    .pw-eye {
+      position: absolute; top: 0; right: 0;
+      width: 2.75rem; height: 2.75rem; padding: 0; margin: 0;
+      background: transparent; border: none; cursor: pointer;
+      font-size: 1rem; line-height: 1;
+      display: inline-flex; align-items: center; justify-content: center;
+      border-radius: 0 var(--no-radius-ctl) var(--no-radius-ctl) 0;
+    }
+    .pw-eye:hover:not([disabled]) { background: var(--no-input); box-shadow: none; }
+    .pw-mismatch { color: var(--no-err); font-size: .8rem; margin: .35rem 0 0; font-weight: 600; }
     small { color: var(--no-text-2); }
     hr { border-color: var(--no-hairline); opacity: 1; }
     code { background: var(--no-input); border: 1px solid var(--no-hairline);
@@ -268,6 +291,14 @@
       background: var(--no-surface); border: 1px solid var(--no-hairline);
       border-radius: 12px; padding: 1.1rem 1.3rem; margin-bottom: 1rem;
       box-shadow: none;
+    }
+    /* …but the fieldset around the settings inputs is NOT its own box: the
+       article above is the only frame (the "inner light-gray box" that had
+       to go was this fieldset, not the article). Scoped to the settings
+       articles so the per-country row-editor fieldsets, which live deeper
+       inside the Countries card, keep their box. */
+    .card > article > fieldset {
+      border: 0; border-radius: 0; background: transparent;
     }
     .card > article > header strong { color: var(--no-text); }
 
@@ -579,12 +610,64 @@
         <pre x-show="restore.result" class="log"><code x-text="JSON.stringify(restore.result, null, 2)"></code></pre>
       </article>
       <article>
+        <header><strong>Change admin username</strong></header>
+        <fieldset class="username-fields" :disabled="busy.user">
+          <label>Current admin username
+            <input type="text" x-model="username.current" disabled>
+          </label>
+          <label>New username (3–64 chars; letters, digits, <code>. _ -</code>)
+            <input type="text" x-model="username.next" autocomplete="username"
+                   placeholder="new-username">
+          </label>
+          <label>Current password <span class="pw-wrap">
+              <input :type="username.reveal ? 'text' : 'password'"
+                     x-model="username.password" autocomplete="current-password">
+              <button type="button" class="pw-eye" @click="username.reveal = !username.reveal"
+                      :aria-pressed="username.reveal"
+                      :title="username.reveal ? 'Hide password' : 'Show password'"
+                      aria-label="Toggle current password visibility"
+                      x-text="username.reveal ? '🙈' : '👁'"></button>
+            </span></label>
+        </fieldset>
+        <p><small>The admin username is the login name for this panel. Changing it does not
+           end your current session — sign in with the new name next time.</small></p>
+        <footer><button @click="changeUsername()" :disabled="busy.user">Change username</button></footer>
+      </article>
+      <article>
         <header><strong>Rotate admin password</strong></header>
         <fieldset :disabled="busy.rotate">
-          <label>Current password <input type="password" x-model="rotate.current"></label>
-          <label>New password (>= 8 chars) <input type="password" x-model="rotate.next"></label>
+          <label>Current password <span class="pw-wrap">
+              <input :type="rotate.revealCurrent ? 'text' : 'password'"
+                     x-model="rotate.current" autocomplete="current-password">
+              <button type="button" class="pw-eye" @click="rotate.revealCurrent = !rotate.revealCurrent"
+                      :aria-pressed="rotate.revealCurrent"
+                      :title="rotate.revealCurrent ? 'Hide password' : 'Show password'"
+                      aria-label="Toggle current password visibility"
+                      x-text="rotate.revealCurrent ? '🙈' : '👁'"></button>
+            </span></label>
+          <label>New password (>= 8 chars) <span class="pw-wrap">
+              <input :type="rotate.revealNext ? 'text' : 'password'"
+                     x-model="rotate.next" autocomplete="new-password">
+              <button type="button" class="pw-eye" @click="rotate.revealNext = !rotate.revealNext"
+                      :aria-pressed="rotate.revealNext"
+                      :title="rotate.revealNext ? 'Hide password' : 'Show password'"
+                      aria-label="Toggle new password visibility"
+                      x-text="rotate.revealNext ? '🙈' : '👁'"></button>
+            </span></label>
+          <label>Confirm new password <span class="pw-wrap">
+              <input :type="rotate.revealConfirm ? 'text' : 'password'"
+                     x-model="rotate.confirm" autocomplete="new-password">
+              <button type="button" class="pw-eye" @click="rotate.revealConfirm = !rotate.revealConfirm"
+                      :aria-pressed="rotate.revealConfirm"
+                      :title="rotate.revealConfirm ? 'Hide password' : 'Show password'"
+                      aria-label="Toggle confirm password visibility"
+                      x-text="rotate.revealConfirm ? '🙈' : '👁'"></button>
+            </span></label>
+          <p x-show="rotate.next && rotate.confirm && rotate.next !== rotate.confirm"
+             class="pw-mismatch">Passwords do not match.</p>
         </fieldset>
-        <footer><button @click="rotatePassword()">Rotate password</button></footer>
+        <footer><button @click="rotatePassword()"
+                        :disabled="!rotate.next || rotate.next !== rotate.confirm">Rotate password</button></footer>
       </article>
       <article>
         <header><strong>Change panel port</strong></header>
@@ -632,7 +715,8 @@
         section: "countries",
         countries: [],
         busy: { countries: false, ports: false, reapply: false, backup: false,
-                rotate: false, port: false, reclone: false, ping: "", tls: false },
+                rotate: false, port: false, reclone: false, ping: "", tls: false,
+                user: false },
         // Phase 28 (item 3): per-country ping state.
         //   cooldown[code] — seconds remaining before Ping test unlocks. Set to
         //     10 when a country is enabled, so the operator has to wait for the
@@ -663,7 +747,12 @@
         logs:  { open: false, code: "", lines: [], lines: 200, linesInput: 200 },
         reapply: { result: null },
         restore: { result: null },
-        rotate: { current: "", next: "" },
+        // Credentials cards. rotate.confirm is the second entry of the new
+        // password (client-side match check; the server enforces >=8 chars).
+        // Each password field has its own reveal flag for the eye toggle.
+        rotate: { current: "", next: "", confirm: "",
+                  revealCurrent: false, revealNext: false, revealConfirm: false },
+        username: { current: "", next: "", password: "", reveal: false },
         port:   { new: 0 },
         // HTTPS (TLS) card state. cert/key hold the operator-editable paths —
         // pre-filled by loadHttpsStatus() with the server's current values
@@ -675,6 +764,7 @@
         async init() {
           await this.refreshAll();
           this.loadHttpsStatus();
+          this.loadUsername();
         },
 
         _csrf: { token: "", fetched: false },
@@ -1132,7 +1222,48 @@
           }
         },
 
+        // ---- Credentials cards (username + password) -------------------
+        // Pre-fill the username card's read-only "current" field. Non-fatal
+        // on failure — the card just stays blank.
+        async loadUsername() {
+          try {
+            const r = await fetch("/api/dashboard/username");
+            if (!r.ok) return;
+            const b = await this._readBody(r);
+            this.username.current = b.username || "";
+          } catch (e) { /* card stays blank */ }
+        },
+
+        async changeUsername() {
+          this.busy.user = true;
+          try {
+            const r = await fetch("/api/dashboard/change-username", {
+              method: "POST",
+              headers: {...(await this._csrfHeaders()), "Content-Type": "application/json"},
+              body: JSON.stringify({
+                current_password: this.username.password,
+                new_username: this.username.next,
+              }),
+            });
+            const body = await this._readBody(r);
+            if (r.ok) {
+              this.username = { current: body.username, next: "", password: "", reveal: false };
+              this.notify(`username changed to ${body.username}`);
+            } else {
+              this.notify(`change username failed: ${body.detail || r.status}`, "err");
+            }
+          } catch (e) {
+            this.notify(`network error: ${e.message}`, "err");
+          } finally {
+            this.busy.user = false;
+          }
+        },
+
         async rotatePassword() {
+          if (this.rotate.next !== this.rotate.confirm) {
+            this.notify("new passwords do not match", "err");
+            return;
+          }
           this.busy.rotate = true;
           try {
             const r = await fetch("/api/dashboard/rotate-password", {
@@ -1145,9 +1276,10 @@
             });
             if (r.ok) {
               this.notify("password rotated");
-              this.rotate = { current: "", next: "" };
+              this.rotate = { current: "", next: "", confirm: "",
+                              revealCurrent: false, revealNext: false, revealConfirm: false };
             } else {
-              const body = await r.json();
+              const body = await this._readBody(r);
               this.notify(`rotate failed: ${body.detail || r.status}`, "err");
             }
           } catch (e) {
@@ -1280,7 +1412,7 @@
   <a class="version-badge" href="https://github.com/DonMonro/psiphon-3x-ui" target="_blank" rel="noopener">
     <!-- GitHub mark (official octocat path, simplified) -->
     <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
-    <span>v1.0.1</span>
+    <span>v1.0.2</span>
   </a>
 </body>
 </html>

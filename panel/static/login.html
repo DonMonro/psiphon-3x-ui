@@ -87,6 +87,24 @@
     .login-card input::placeholder { color: rgba(154,163,178,.6); }
     .login-card input:focus { border-color: var(--no-accent-hi); box-shadow: 0 0 0 3px var(--no-accent-soft); outline: none; }
 
+    /* Password field with inline show/hide eye toggle (mirrors dashboard).
+       Pinned to the input's own 2.75rem box (top:0 + height) — the wrapper
+       is a line box around an inline-block input, a few px taller than the
+       input (descender slack below), and a button centred on the wrapper
+       sat visibly low. Keep this height in sync with the input height
+       rule above. */
+    .login-card .pw-wrap { position: relative; display: block; }
+    .login-card .pw-wrap input { width: 100%; padding-right: 2.75rem; }
+    .login-card .pw-eye {
+      position: absolute; top: 0; right: 0;
+      width: 2.75rem; height: 2.75rem; padding: 0; margin: 0;
+      background: transparent; border: none; cursor: pointer;
+      font-size: 1rem; line-height: 1;
+      display: inline-flex; align-items: center; justify-content: center;
+      border-radius: 0 var(--no-radius-ctl) var(--no-radius-ctl) 0;
+    }
+    .login-card .pw-eye:hover:not([disabled]) { background: var(--no-input); box-shadow: none; }
+
     .login-card button {
       width: 100%; margin-top: .5rem; height: 2.75rem;
       background: var(--no-accent); border: 1px solid transparent;
@@ -154,9 +172,17 @@
                :disabled="busy" placeholder="admin">
 
         <label for="password" style="margin-top:.75rem">Password</label>
-        <input id="password" name="password" type="password" autocomplete="current-password"
-               x-model="form.password" required
-               :disabled="busy" placeholder="••••••••••">
+        <span class="pw-wrap">
+          <input id="password" name="password" type="password" autocomplete="current-password"
+                 x-model="form.password" required
+                 :disabled="busy" placeholder="••••••••••"
+                 :type="form.reveal ? 'text' : 'password'">
+          <button type="button" class="pw-eye" @click="form.reveal = !form.reveal"
+                  :aria-pressed="form.reveal"
+                  :title="form.reveal ? 'Hide password' : 'Show password'"
+                  aria-label="Toggle password visibility"
+                  x-text="form.reveal ? '🙈' : '👁'"></button>
+        </span>
 
         <button type="submit" :disabled="busy" :aria-busy="busy">
           <span x-show="!busy">Sign in</span>
@@ -170,7 +196,7 @@
   <a class="version-badge" href="https://github.com/DonMonro/psiphon-3x-ui" target="_blank" rel="noopener">
     <!-- GitHub mark (official octocat path, simplified) -->
     <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
-    <span>v1.0.1</span>
+    <span>v1.0.2</span>
   </a>
 
   <!-- Alpine.js (same CDN as the management dashboard for cache reuse) -->
@@ -178,7 +204,7 @@
   <script>
     function appLogin() {
       return {
-        form: { user: "", password: "" },
+        form: { user: "", password: "", reveal: false },
         busy: false,
         toast: { text: "", kind: "err" },
 

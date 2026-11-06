@@ -1684,6 +1684,71 @@ class TestRotatePassword:
 
 
 # ===========================================================================
+# 9b. GET/POST /api/dashboard/username · /api/dashboard/change-username
+# ===========================================================================
+class TestChangeUsername:
+    def test_get_username_prefills_card(self, monkeypatch, tmp_path):
+        client = _client(monkeypatch, tmp_path)
+        _login(client)
+        r = client.get("/api/dashboard/username")
+        assert r.status_code == 200
+        assert r.json() == {"username": "admin"}
+
+    def test_happy_changes_and_new_username_logs_in(self, monkeypatch, tmp_path):
+        client = _client(monkeypatch, tmp_path)
+        _login(client)
+        r = client.post(
+            "/api/dashboard/change-username",
+            json={"current_password": "correct-horse-battery-staple", "new_username": "ops-admin"},
+        )
+        assert r.status_code == 200
+        assert r.json() == {"changed": True, "username": "ops-admin"}
+
+        # Old login name now fails; the new one succeeds. The still-open
+        # session cookie stays valid (its signature doesn't embed the name).
+        r = client.post(
+            "/auth/login", json={"user": "admin", "password": "correct-horse-battery-staple"}
+        )
+        assert r.status_code == 401
+        r = client.post(
+            "/auth/login", json={"user": "ops-admin", "password": "correct-horse-battery-staple"}
+        )
+        assert r.status_code == 204
+
+    def test_wrong_password_returns_401(self, monkeypatch, tmp_path):
+        client = _client(monkeypatch, tmp_path)
+        _login(client)
+        r = client.post(
+            "/api/dashboard/change-username",
+            json={"current_password": " WRONG ", "new_username": "ops-admin"},
+        )
+        assert r.status_code == 401
+        # Nothing was written.
+        r = client.get("/api/dashboard/username")
+        assert r.json()["username"] == "admin"
+
+    def test_same_username_returns_noop(self, monkeypatch, tmp_path):
+        client = _client(monkeypatch, tmp_path)
+        _login(client)
+        r = client.post(
+            "/api/dashboard/change-username",
+            json={"current_password": "correct-horse-battery-staple", "new_username": "admin"},
+        )
+        assert r.status_code == 200
+        assert r.json() == {"changed": False, "username": "admin"}
+
+    def test_invalid_username_rejected_422(self, monkeypatch, tmp_path):
+        client = _client(monkeypatch, tmp_path)
+        _login(client)
+        for bad in ("ab", "has space", "trailing/dash", "x" * 65):
+            r = client.post(
+                "/api/dashboard/change-username",
+                json={"current_password": "correct-horse-battery-staple", "new_username": bad},
+            )
+            assert r.status_code == 422, bad
+
+
+# ===========================================================================
 # 10. POST /api/dashboard/change-panel-port
 # ===========================================================================
 def _stub_listening_ports(monkeypatch, ports: set[int]):
