@@ -1004,10 +1004,10 @@ class TestHotfix3PostReleaseRegressions:
     def _readme(self) -> Path:
         return self._repo_root / "README.md"
 
-    # ---- Bug #1: INSTALL_PREFIX group-writable (chmod 0770) -------------
+    # ---- Bug #1: INSTALL_PREFIX group-writable (chmod 2775, setgid) ----
     def test_prepare_user_chmods_install_prefix_group_writable(self):
-        """``installer/prepare_user.sh`` MUST chmod the INSTALL_PREFIX to 0770
-        (group rwx) — not 0750 (group r-x). SQLite needs directory-level
+        """``installer/prepare_user.sh`` MUST chmod the INSTALL_PREFIX
+        group-writable — not 0750 (group r-x). SQLite needs directory-level
         WRITE access to create the -wal / -shm / -journal sidecar files
         next to panel.db; the service uid (in group `psiphon3xui`) couldn't
         create them with 0750, so the first INSERT INTO wizard blew up as
@@ -1015,17 +1015,24 @@ class TestHotfix3PostReleaseRegressions:
         (see Hotfix #3 Bug #1 + the journalctl traceback pasted by the
         operator). Lock the chmod mode in source so a future edit reverting
         it is caught here, not on the next operator install.
+
+        The mode itself evolved after Hotfix #3: bare 0770 (Hotfix #3) →
+        2775 (Hotfix #11, setgid so new files inherit the psiphon3xui
+        group; Hotfix #12 relies on that for the tunnel unit's
+        ExecStartPre mkdir). Pin the current 2775 form.
         """
         text = self._prepare_user_sh.read_text(encoding="utf-8")
-        # The fix uses the literal `chmod 0770 "${INSTALL_PREFIX}"` line; the
-        # repo also chmods CONFIG_DIR + BIN_DIR so check the INSTALL_PREFIX
-        # form specifically — that's the directory that holds panel.db.
-        assert 'chmod 0770 "${INSTALL_PREFIX}"' in text, (
-            "installer/prepare_user.sh MUST chmod INSTALL_PREFIX to 0770 so the "
-            "psiphon3xui service uid (in group psiphon3xui) can create SQLite "
-            "WAL/journal sidecars next to panel.db. The 0750 mode (group r-x) "
-            "made the first INSERT INTO wizard fail with 'attempt to write a "
-            "readonly database' (Bug #1 — Hotfix #3)."
+        # The fix uses the literal `chmod 2775 "${INSTALL_PREFIX}"` line; the
+        # repo also chmods CONFIG_DIR (2775) + BIN_DIR (0750) so check the
+        # INSTALL_PREFIX form specifically — that's the directory that holds
+        # panel.db.
+        assert 'chmod 2775 "${INSTALL_PREFIX}"' in text, (
+            "installer/prepare_user.sh MUST chmod INSTALL_PREFIX to 2775 "
+            "(group-writable + setgid) so the psiphon3xui service uid (in "
+            "group psiphon3xui) can create SQLite WAL/journal sidecars next "
+            "to panel.db. The 0750 mode (group r-x) made the first INSERT "
+            "INTO wizard fail with 'attempt to write a readonly database' "
+            "(Bug #1 — Hotfix #3; setgid form added in Hotfix #11)."
         )
         # And MUST NOT regress to 0750 on that exact line:
         assert 'chmod 0750 "${INSTALL_PREFIX}"' not in text, (
@@ -1035,18 +1042,22 @@ class TestHotfix3PostReleaseRegressions:
         )
 
     def test_prepare_user_chowns_install_prefix_to_service_group(self):
-        """The chmod 0770 only matters because the directory is also owned
-        group-psiphon3xui (chown root:psiphon3xui). Without the chown the
-        group bit is meaningless. Lock both in together so a future edit
-        flipping one without the other still trips this test."""
+        """The group-writable chmod only matters because the directory is
+        also owned group-psiphon3xui (chown root:psiphon3xui). Without the
+        chown the group bit is meaningless. Lock both in together so a
+        future edit flipping one without the other still trips this test."""
         text = self._prepare_user_sh.read_text(encoding="utf-8")
-        assert '"root:${PSIPHON3XUI_GROUP}" "${INSTALL_PREFIX}"' in text or (
-            'chown -R "root:${PSIPHON3XUI_GROUP}" "${INSTALL_PREFIX}"' in text
+        # Two quoting styles exist across the script's history
+        # (root:"${GROUP}" is the current one; "root:${GROUP}" the older).
+        # Accept either — the invariant is the root:psiphon3xui ownership.
+        assert (
+            'chown -R root:"${PSIPHON3XUI_GROUP}" "${INSTALL_PREFIX}"' in text
+            or 'chown -R "root:${PSIPHON3XUI_GROUP}" "${INSTALL_PREFIX}"' in text
         ), (
             "installer/prepare_user.sh MUST chown INSTALL_PREFIX root:psiphon3xui "
-            "so the 0770 group-write bit actually grants the service uid write "
-            "access (the chmod 0770 alone is meaningless without the matching "
-            "chown — Bug #1 Hotfix #3)."
+            "so the group-write chmod (2775) actually grants the service uid "
+            "write access (the chmod alone is meaningless without the "
+            "matching chown — Bug #1 Hotfix #3)."
         )
 
     # ---- Bug #3: uninstall docs use the curl-pipe form ------------------
@@ -6538,7 +6549,7 @@ class TestPhase28DashboardActions:
             "so the latency reported belongs to that country's tunnel."
         )
 
-    def test_ping_button_holds_a_five_second_countdown(self):
+    def test_ping_button_holds_a_ten_second_countdown(self):
         html = self._strip_comments(self._DASHBOARD_HTML.read_text(encoding="utf-8"))
         cell = self._actions_cell()
         # The countdown must gate the button, not merely be displayed.
@@ -6552,10 +6563,13 @@ class TestPhase28DashboardActions:
             "Phase 28 (item 3) — while the countdown is above zero the button "
             "must be unclickable, forcing the operator to wait for setup."
         )
-        # The hold is specified as 5 seconds, and the remaining count must be
-        # rendered on the button so the operator can see the wait tick down.
-        assert re.search(r"startCooldown\(\s*code\s*,\s*secs\s*=\s*5\s*\)", html), (
-            "Phase 28 (item 3) — startCooldown must default to a 5 second hold."
+        # The hold is 10 seconds (Phase 28 note: "Set to 10 when a country is
+        # enabled, so the operator has to wait for the tunnel to come up
+        # instead of pinging a half-started Psiphon"), and the remaining
+        # count must be rendered on the button so the operator can see the
+        # wait tick down.
+        assert re.search(r"startCooldown\(\s*code\s*,\s*secs\s*=\s*10\s*\)", html), (
+            "Phase 28 (item 3) — startCooldown must default to a 10 second hold."
         )
         assert re.search(r"cooldown\[c\.code\][^\n]*\}\s*\)?\s*`", cell) or re.search(
             r"\$\{cooldown\[c\.code\]", cell
@@ -6570,7 +6584,7 @@ class TestPhase28DashboardActions:
         assert m is not None, "toggleEnabled() not found in dashboard.html"
         body = m.group(0)
         assert re.search(r"this\.startCooldown\(\s*c\.code\s*\)", body), (
-            "Phase 28 (item 3) — enabling a country must start the 5 s hold; "
+            "Phase 28 (item 3) — enabling a country must start the 10 s hold; "
             "pinging immediately after an enable reports a false failure "
             "because Psiphon has not finished establishing the tunnel."
         )

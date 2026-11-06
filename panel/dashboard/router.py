@@ -732,6 +732,10 @@ class RotatePasswordBody(BaseModel):
 class ChangeUsernameBody(BaseModel):
     """``POST /api/dashboard/change-username`` body."""
 
+    # Existing names may predate the stricter rules for new usernames.
+    current_username: str = Field(
+        ..., min_length=1, max_length=64, description="current admin username (re-verify)"
+    )
     current_password: str = Field(
         ..., description="current admin password (re-verify, mirrors rotate-password)"
     )
@@ -2032,7 +2036,7 @@ def get_username(
     user: Annotated[dict, Depends(get_current_user)],
     db: Session = Depends(get_db),  # noqa: B008  FastAPI idiom
 ) -> dict[str, Any]:
-    """Return the current admin username (pre-fills the settings card)."""
+    """Return the current stored admin username."""
     _require_wizard_completed(db)
     settings = db.get(Settings, {"id": 1})
     if settings is None:  # pragma: no cover — _require_wizard_completed guards
@@ -2048,12 +2052,10 @@ def change_username(
 ) -> dict[str, Any]:
     """Change the admin login username.
 
-    Re-verifies ``current_password`` before writing, so a leaked session
-    cookie alone can't rename the account. The session cookie payload is
-    ``{"sub": <username>}`` and the login endpoint compares against
-    ``Settings.admin_user`` — both pick up the new name on their next
-    use, so no service restart is needed. The current session stays valid:
-    its signature doesn't embed the username, only its payload does.
+    Verify the manually entered current username and password before writing,
+    so a leaked session cookie alone can't rename the account. New logins use
+    the updated ``Settings.admin_user`` immediately; existing signed sessions
+    remain valid, and no service restart is needed.
     """
     _require_wizard_completed(db)
     settings = db.get(Settings, {"id": 1})
@@ -2063,6 +2065,11 @@ def change_username(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="current password does not match",
+        )
+    if body.current_username != settings.admin_user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="current admin username does not match",
         )
     if body.new_username == settings.admin_user:
         return {"changed": False, "username": settings.admin_user}

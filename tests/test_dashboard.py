@@ -1658,36 +1658,50 @@ class TestRotatePassword:
         )
         assert r.status_code == 204
 
-    def test_wrong_current_returns_401(self, monkeypatch, tmp_path):
+    @pytest.mark.parametrize("current_password", ["", " WRONG "])
+    def test_wrong_current_returns_401(self, monkeypatch, tmp_path, current_password):
         client = _client(monkeypatch, tmp_path)
         _login(client)
+        with Session(get_engine()) as s:
+            original_hash = s.get(Settings, 1).admin_pass_hash
         r = client.post(
             "/api/dashboard/rotate-password",
             json={
-                "current_password": " WRONG ",
+                "current_password": current_password,
                 "new_password": "another-strong-pw-2026",
             },
         )
         assert r.status_code == 401
+        assert r.json()["detail"] == "current password does not match"
+        with Session(get_engine()) as s:
+            assert s.get(Settings, 1).admin_pass_hash == original_hash
 
-    def test_short_new_returns_422(self, monkeypatch, tmp_path):
+    def test_invalid_new_password_returns_validation_details(self, monkeypatch, tmp_path):
         client = _client(monkeypatch, tmp_path)
         _login(client)
-        r = client.post(
-            "/api/dashboard/rotate-password",
-            json={
-                "current_password": "correct-horse-battery-staple",
-                "new_password": "short",
-            },
-        )
-        assert r.status_code == 422
+        with Session(get_engine()) as s:
+            original_hash = s.get(Settings, 1).admin_pass_hash
+        for new_password in ("", "short", "x" * 7, "x" * 129, "🔒" * 7, None, 123):
+            r = client.post(
+                "/api/dashboard/rotate-password",
+                json={
+                    "current_password": "correct-horse-battery-staple",
+                    "new_password": new_password,
+                },
+            )
+            assert r.status_code == 422
+            detail = r.json()["detail"]
+            assert detail[0]["loc"] == ["body", "new_password"]
+            assert isinstance(detail[0]["msg"], str)
+        with Session(get_engine()) as s:
+            assert s.get(Settings, 1).admin_pass_hash == original_hash
 
 
 # ===========================================================================
 # 9b. GET/POST /api/dashboard/username · /api/dashboard/change-username
 # ===========================================================================
 class TestChangeUsername:
-    def test_get_username_prefills_card(self, monkeypatch, tmp_path):
+    def test_get_username_returns_stored_name(self, monkeypatch, tmp_path):
         client = _client(monkeypatch, tmp_path)
         _login(client)
         r = client.get("/api/dashboard/username")
@@ -1699,13 +1713,19 @@ class TestChangeUsername:
         _login(client)
         r = client.post(
             "/api/dashboard/change-username",
-            json={"current_password": "correct-horse-battery-staple", "new_username": "ops-admin"},
+            json={
+                "current_username": "admin",
+                "current_password": "correct-horse-battery-staple",
+                "new_username": "ops-admin",
+            },
         )
         assert r.status_code == 200
         assert r.json() == {"changed": True, "username": "ops-admin"}
 
-        # Old login name now fails; the new one succeeds. The still-open
-        # session cookie stays valid (its signature doesn't embed the name).
+        # Existing signed sessions stay valid; new logins use the stored name.
+        r = client.get("/api/dashboard/username")
+        assert r.status_code == 200
+        assert r.json()["username"] == "ops-admin"
         r = client.post(
             "/auth/login", json={"user": "admin", "password": "correct-horse-battery-staple"}
         )
@@ -1715,24 +1735,119 @@ class TestChangeUsername:
         )
         assert r.status_code == 204
 
-    def test_wrong_password_returns_401(self, monkeypatch, tmp_path):
+    @pytest.mark.parametrize("new_username", ["ops-admin", "admin"])
+    def test_wrong_password_returns_401(self, monkeypatch, tmp_path, new_username):
         client = _client(monkeypatch, tmp_path)
         _login(client)
         r = client.post(
             "/api/dashboard/change-username",
-            json={"current_password": " WRONG ", "new_username": "ops-admin"},
+            json={
+                "current_username": "admin",
+                "current_password": " WRONG ",
+                "new_username": new_username,
+            },
         )
         assert r.status_code == 401
-        # Nothing was written.
-        r = client.get("/api/dashboard/username")
-        assert r.json()["username"] == "admin"
+        assert r.json()["detail"] == "current password does not match"
+        assert client.get("/api/dashboard/username").json()["username"] == "admin"
+        _login(client)
+
+    @pytest.mark.parametrize("new_username", ["ops-admin", "admin"])
+    def test_wrong_current_username_returns_401(self, monkeypatch, tmp_path, new_username):
+        client = _client(monkeypatch, tmp_path)
+        _login(client)
+        for current_username in ("other-admin", "Admin", " admin "):
+            r = client.post(
+                "/api/dashboard/change-username",
+                json={
+                    "current_username": current_username,
+                    "current_password": "correct-horse-battery-staple",
+                    "new_username": new_username,
+                },
+            )
+            assert r.status_code == 401
+            assert r.json()["detail"] == "current admin username does not match"
+            assert client.get("/api/dashboard/username").json()["username"] == "admin"
+        _login(client)
+
+    def test_current_username_is_required_and_validated(self, monkeypatch, tmp_path):
+        client = _client(monkeypatch, tmp_path)
+        _login(client)
+        with Session(get_engine()) as s:
+            original_hash = s.get(Settings, 1).admin_pass_hash
+        for current in (
+            {},
+            {"current_username": ""},
+            {"current_username": None},
+            {"current_username": 123},
+            {"current_username": "x" * 65},
+        ):
+            r = client.post(
+                "/api/dashboard/change-username",
+                json={
+                    "current_password": "correct-horse-battery-staple",
+                    "new_username": "ops-admin",
+                    **current,
+                },
+            )
+            assert r.status_code == 422
+            assert r.json()["detail"][0]["loc"] == ["body", "current_username"]
+        with Session(get_engine()) as s:
+            settings = s.get(Settings, 1)
+            assert settings.admin_user == "admin"
+            assert settings.admin_pass_hash == original_hash
+
+    @pytest.mark.parametrize("current_username", ["a", "Old Admin", "مدیر"])
+    def test_existing_installer_username_formats_still_work(
+        self, monkeypatch, tmp_path, current_username
+    ):
+        client = _client(monkeypatch, tmp_path)
+        with Session(get_engine()) as s:
+            s.get(Settings, 1).admin_user = current_username
+            s.commit()
+        r = client.post(
+            "/auth/login",
+            json={"user": current_username, "password": "correct-horse-battery-staple"},
+        )
+        assert r.status_code == 204
+        r = client.post(
+            "/api/dashboard/change-username",
+            json={
+                "current_username": current_username,
+                "current_password": "correct-horse-battery-staple",
+                "new_username": "ops-admin",
+            },
+        )
+        assert r.status_code == 200
+        assert r.json() == {"changed": True, "username": "ops-admin"}
+
+    def test_second_rename_checks_stored_name_not_session_subject(self, monkeypatch, tmp_path):
+        client = _client(monkeypatch, tmp_path)
+        _login(client)
+        body = {
+            "current_username": "admin",
+            "current_password": "correct-horse-battery-staple",
+            "new_username": "ops-admin",
+        }
+        assert client.post("/api/dashboard/change-username", json=body).status_code == 200
+        body["new_username"] = "ops-admin-2"
+        assert client.post("/api/dashboard/change-username", json=body).status_code == 401
+        assert client.get("/api/dashboard/username").json()["username"] == "ops-admin"
+        body["current_username"] = "ops-admin"
+        r = client.post("/api/dashboard/change-username", json=body)
+        assert r.status_code == 200
+        assert r.json() == {"changed": True, "username": "ops-admin-2"}
 
     def test_same_username_returns_noop(self, monkeypatch, tmp_path):
         client = _client(monkeypatch, tmp_path)
         _login(client)
         r = client.post(
             "/api/dashboard/change-username",
-            json={"current_password": "correct-horse-battery-staple", "new_username": "admin"},
+            json={
+                "current_username": "admin",
+                "current_password": "correct-horse-battery-staple",
+                "new_username": "admin",
+            },
         )
         assert r.status_code == 200
         assert r.json() == {"changed": False, "username": "admin"}
@@ -1740,12 +1855,60 @@ class TestChangeUsername:
     def test_invalid_username_rejected_422(self, monkeypatch, tmp_path):
         client = _client(monkeypatch, tmp_path)
         _login(client)
-        for bad in ("ab", "has space", "trailing/dash", "x" * 65):
+        for bad in ("", "ab", "has space", "trailing/dash", "admin\n", "مدیر", "x" * 65):
             r = client.post(
                 "/api/dashboard/change-username",
-                json={"current_password": "correct-horse-battery-staple", "new_username": bad},
+                json={
+                    "current_username": "admin",
+                    "current_password": "correct-horse-battery-staple",
+                    "new_username": bad,
+                },
             )
             assert r.status_code == 422, bad
+            assert r.json()["detail"][0]["loc"] == ["body", "new_username"]
+            assert client.get("/api/dashboard/username").json()["username"] == "admin"
+        _login(client)
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "body"),
+    [
+        (
+            "/api/dashboard/rotate-password",
+            {
+                "current_password": "correct-horse-battery-staple",
+                "new_password": "new-strong-password-2026",
+            },
+        ),
+        (
+            "/api/dashboard/change-username",
+            {
+                "current_username": "admin",
+                "current_password": "correct-horse-battery-staple",
+                "new_username": "ops-admin",
+            },
+        ),
+    ],
+)
+def test_credential_updates_require_csrf(monkeypatch, tmp_path, endpoint, body):
+    client = _client(monkeypatch, tmp_path)
+    _login(client)
+    from panel import main as panel_main
+
+    monkeypatch.setattr(panel_main, "_CSRF_ENFORCE", True)
+    with Session(get_engine()) as s:
+        original_hash = s.get(Settings, 1).admin_pass_hash
+    for headers in ({}, {"X-CSRF-Token": "wrong-token"}):
+        r = client.post(endpoint, json=body, headers=headers)
+        assert r.status_code == 403
+        assert r.json()["detail"] == "CSRF token missing or invalid."
+        with Session(get_engine()) as s:
+            settings = s.get(Settings, 1)
+            assert settings.admin_user == "admin"
+            assert settings.admin_pass_hash == original_hash
+    token = client.get("/auth/csrf").json()["token"]
+    r = client.post(endpoint, json=body, headers={"X-CSRF-Token": token})
+    assert r.status_code == 200
 
 
 # ===========================================================================

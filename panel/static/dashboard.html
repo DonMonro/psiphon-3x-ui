@@ -613,11 +613,12 @@
         <header><strong>Change admin username</strong></header>
         <fieldset class="username-fields" :disabled="busy.user">
           <label>Current admin username
-            <input type="text" x-model="username.current" disabled>
+            <input id="current-admin-username" type="text" x-model="username.current"
+                   autocomplete="off" autocapitalize="none" spellcheck="false">
           </label>
           <label>New username (3–64 chars; letters, digits, <code>. _ -</code>)
-            <input type="text" x-model="username.next" autocomplete="username"
-                   placeholder="new-username">
+            <input type="text" x-model="username.next" autocomplete="off"
+                   autocapitalize="none" spellcheck="false" placeholder="new-username">
           </label>
           <label>Current password <span class="pw-wrap">
               <input :type="username.reveal ? 'text' : 'password'"
@@ -667,7 +668,7 @@
              class="pw-mismatch">Passwords do not match.</p>
         </fieldset>
         <footer><button @click="rotatePassword()"
-                        :disabled="!rotate.next || rotate.next !== rotate.confirm">Rotate password</button></footer>
+                        :disabled="busy.rotate || !rotate.next || rotate.next !== rotate.confirm">Rotate password</button></footer>
       </article>
       <article>
         <header><strong>Change panel port</strong></header>
@@ -764,7 +765,6 @@
         async init() {
           await this.refreshAll();
           this.loadHttpsStatus();
-          this.loadUsername();
         },
 
         _csrf: { token: "", fetched: false },
@@ -1223,34 +1223,61 @@
         },
 
         // ---- Credentials cards (username + password) -------------------
-        // Pre-fill the username card's read-only "current" field. Non-fatal
-        // on failure — the card just stays blank.
-        async loadUsername() {
-          try {
-            const r = await fetch("/api/dashboard/username");
-            if (!r.ok) return;
-            const b = await this._readBody(r);
-            this.username.current = b.username || "";
-          } catch (e) { /* card stays blank */ }
+        _errorMessage(body, status) {
+          // FastAPI 422 details are arrays, not strings. Read only messages
+          // and known field names: validation records can include passwords
+          // in their `input` / `ctx` properties, which must not reach a toast.
+          const fields = {
+            current_username: "Current admin username",
+            current_password: "Current password",
+            new_username: "New username",
+            new_password: "New password",
+          };
+          const detail = body?.detail;
+          const messages = (Array.isArray(detail) ? detail : [detail]).map(error => {
+            if (typeof error === "string") return error;
+            const message = typeof error?.msg === "string" ? error.msg
+              : typeof error?.message === "string" ? error.message : "";
+            const label = Array.isArray(error?.loc) ? fields[error.loc.at(-1)] : "";
+            return message && typeof label === "string" && label
+              ? `${label}: ${message}` : message;
+          }).filter(Boolean);
+          return messages.join("; ") || `HTTP ${status}`;
         },
 
         async changeUsername() {
+          if (this.busy.user) return;
+          if (!this.username.current || [...this.username.current].length > 64) {
+            this.notify("Enter your current admin username (1–64 characters).", "err");
+            return;
+          }
+          if (!this.username.password) {
+            this.notify("Enter your current password.", "err");
+            return;
+          }
+          if (this.username.next.length < 3 || this.username.next.length > 64
+              || /[^A-Za-z0-9_.-]/.test(this.username.next)) {
+            this.notify("New username must be 3–64 characters: letters, digits, '.', '_' or '-'.", "err");
+            return;
+          }
           this.busy.user = true;
           try {
             const r = await fetch("/api/dashboard/change-username", {
               method: "POST",
               headers: {...(await this._csrfHeaders()), "Content-Type": "application/json"},
               body: JSON.stringify({
+                current_username: this.username.current,
                 current_password: this.username.password,
                 new_username: this.username.next,
               }),
             });
             const body = await this._readBody(r);
             if (r.ok) {
-              this.username = { current: body.username, next: "", password: "", reveal: false };
-              this.notify(`username changed to ${body.username}`);
+              this.username = { current: "", next: "", password: "", reveal: false };
+              this.notify(body.changed === false ? "username is unchanged"
+                : `username changed to ${body.username}`);
             } else {
-              this.notify(`change username failed: ${body.detail || r.status}`, "err");
+              this.notify(`change username failed: ${this._errorMessage(body, r.status)}`, "err");
             }
           } catch (e) {
             this.notify(`network error: ${e.message}`, "err");
@@ -1260,6 +1287,17 @@
         },
 
         async rotatePassword() {
+          if (this.busy.rotate) return;
+          if (!this.rotate.current) {
+            this.notify("Enter your current password.", "err");
+            return;
+          }
+          // Count Unicode code points like the API, not UTF-16 code units.
+          const length = [...this.rotate.next].length;
+          if (length < 8 || length > 128) {
+            this.notify("New password must be between 8 and 128 characters.", "err");
+            return;
+          }
           if (this.rotate.next !== this.rotate.confirm) {
             this.notify("new passwords do not match", "err");
             return;
@@ -1280,7 +1318,7 @@
                               revealCurrent: false, revealNext: false, revealConfirm: false };
             } else {
               const body = await this._readBody(r);
-              this.notify(`rotate failed: ${body.detail || r.status}`, "err");
+              this.notify(`rotate failed: ${this._errorMessage(body, r.status)}`, "err");
             }
           } catch (e) {
             this.notify(`network error: ${e.message}`, "err");
@@ -1412,7 +1450,7 @@
   <a class="version-badge" href="https://github.com/DonMonro/psiphon-3x-ui" target="_blank" rel="noopener">
     <!-- GitHub mark (official octocat path, simplified) -->
     <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
-    <span>v1.0.2</span>
+    <span>v1.0.3</span>
   </a>
 </body>
 </html>
