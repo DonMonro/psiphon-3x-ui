@@ -32,6 +32,7 @@ from .auth import (
     login_rate_limit_reset,
     set_csrf_cookie,
     set_session_cookie,
+    verify_csrf_token,
     verify_password,
 )
 from .config import load_countries
@@ -53,7 +54,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Psiphon-3X-UI",
     description="Psiphon companion panel for Sanaei 3x-ui.",
-    version="1.1.0",
+    version="1.0.4",
     lifespan=lifespan,
 )
 
@@ -166,9 +167,8 @@ def me(
     """Return the current admin's identity + wizard status.
 
     401 if not authenticated. The front-end uses this on page-load to decide
-    whether to redirect to ``/login`` or ``/wizard``. The response also
-    sets a fresh CSRF cookie (idempotent — same token returned if already
-    set, else a new one) so the SPA can read it for mutating calls.
+    whether to redirect to ``/login`` or ``/wizard``. CSRF tokens are issued
+    by login or ``GET /auth/csrf``; this read does not rotate cookies.
     """
     settings = db.get(Settings, {"id": 1})
     wizard_completed = bool(settings.wizard_completed) if settings else False
@@ -179,24 +179,28 @@ def me(
 
 
 # ---------------------------------------------------------------------------
-# CSRF (Phase 7) — signed double-submit cookie. The SPA either reuses the
-# cookie mint on login success or fetches a fresh one here before its first
-# PATCH/POST. The middleware below enforces a matching X-CSRF-Token header
-# on every state-changing verb (with exemptions for the auth endpoints
-# themselves and the wizard's SSE streams, which can't have custom headers).
+# CSRF (Phase 7) — signed double-submit cookie. The SPA echoes the live
+# cookie and can recover a missing or expired token through /auth/csrf.
+# Auth and wizard-stream exemptions below retain their existing behavior.
 # ---------------------------------------------------------------------------
 @app.get("/auth/csrf", tags=["auth"])
-def get_csrf(user: Annotated[dict, Depends(get_current_user)], response: Response) -> dict:
-    """Issue (or refresh) a CSRF cookie and return the token for the SPA."""
-    token = set_csrf_cookie(response)
+def get_csrf(
+    request: Request, user: Annotated[dict, Depends(get_current_user)], response: Response
+) -> dict:
+    """Return a valid token without rotating the cookie of another open tab."""
+    response.headers["Cache-Control"] = "no-store"
+    token = request.cookies.get(CSRF_COOKIE_NAME)
+    if not verify_csrf_token(token):
+        token = set_csrf_cookie(response)
     return {"token": token}
 
 
 @app.get("/api/csrf", tags=["auth"], include_in_schema=False)
-def get_csrf_legacy(user: Annotated[dict, Depends(get_current_user)], response: Response) -> dict:
+def get_csrf_legacy(
+    request: Request, user: Annotated[dict, Depends(get_current_user)], response: Response
+) -> dict:
     """Alias of ``GET /auth/csrf`` retained for older SPA builds."""
-    token = set_csrf_cookie(response)
-    return {"token": token}
+    return get_csrf(request, user, response)
 
 
 # Endpoints exempted from CSRF — their state-changing verbs can't carry
@@ -231,13 +235,18 @@ async def csrf_guard(request: Request, call_next):
     and any deployment where ``PSIPHON3XUI_CSRF_ENFORCE`` is disabled. Failure
     is a 403 with a JSON body so the SPA can surface the message and re-fetch
     ``GET /auth/csrf``.
+
+    The cookie's signature and age must also be valid: comparing two equal
+    attacker-chosen strings alone is not signed double-submit protection.
     """
     if _CSRF_ENFORCE and request.method in _csrf_methods:
         is_exempt = any(request.url.path.startswith(p) for p in _csrf_exempt_prefixes)
         if not is_exempt:
             cookie_token = request.cookies.get(CSRF_COOKIE_NAME)
             header_token = request.headers.get(CSRF_HEADER_NAME)
-            if not csrf_tokens_match(cookie_token, header_token):
+            if not (
+                verify_csrf_token(cookie_token) and csrf_tokens_match(cookie_token, header_token)
+            ):
                 return JSONResponse(
                     status_code=status.HTTP_403_FORBIDDEN,
                     content={"detail": "CSRF token missing or invalid."},

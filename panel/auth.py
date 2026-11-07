@@ -218,17 +218,14 @@ def decrypt_creds(token: str, *, max_age: int | None = None) -> dict | None:
 # ---------------------------------------------------------------------------
 # CSRF protection (Phase 7 — signed double-submit cookie).
 #
-# Strategy: the panel issues a fresh random token in a non-HttpOnly cookie on
-# every authenticated response (so the SPA can read it). The SPA echoes it
-# back as the ``X-CSRF-Token`` header on every state-changing request. The
-# middleware compares the cookie value vs the header value in constant time and
-# rejects POST/PUT/PATCH/DELETE with 403 on mismatch or absence. Origin
-# checking would be even tighter but breaks the "SPA lives at /dashboard
-# served by the same origin" deployment we ship in v1, so double-submit is
-# our baseline; the cookie is signed so an attacker can't just set their own
-# value via a subdomain.
+# Login issues a signed token in a non-HttpOnly cookie. The SPA echoes the
+# live cookie in X-CSRF-Token; /auth/csrf reuses it until it is missing or
+# invalid. The middleware requires both a valid signature/age and a matching
+# header on protected mutations. Reusing valid tokens avoids rotating the
+# shared cookie underneath another open panel tab.
 # ---------------------------------------------------------------------------
 CSRF_SERIALIZER_SALT = "psiphon-3x-ui-csrf"
+CSRF_COOKIE_MAX_AGE = 60 * 60 * 24
 
 
 def _csrf_signer() -> URLSafeTimedSerializer:
@@ -241,7 +238,7 @@ def issue_csrf_token() -> str:
     return _csrf_signer().dumps({"t": raw})
 
 
-def verify_csrf_token(token: str | None, *, max_age: int = 60 * 60 * 24) -> bool:
+def verify_csrf_token(token: str | None, *, max_age: int = CSRF_COOKIE_MAX_AGE) -> bool:
     """Return True iff *token* is a valid, recently-minted CSRF token."""
     if not token:
         return False
@@ -255,18 +252,18 @@ def verify_csrf_token(token: str | None, *, max_age: int = 60 * 60 * 24) -> bool
 
 
 def set_csrf_cookie(response: Response, token: str | None = None) -> str:
-    """Attach a CSRF cookie to *response* and return the raw token string.
+    """Attach a readable CSRF cookie and return its token.
 
-    The cookie is non-HttpOnly so the SPA shell can read it. Call on login
-    success and on every authenticated GET so a freshly-logged-in admin gets
-    a token before the first mutating request.
+    Login always mints a fresh token. ``GET /auth/csrf`` calls this only when
+    the request has no valid token, so a valid cookie's expiry is not extended
+    beyond its signed lifetime.
     """
     if token is None:
         token = issue_csrf_token()
     response.set_cookie(
         key=CSRF_COOKIE_NAME,
         value=token,
-        max_age=60 * 60 * 24,
+        max_age=CSRF_COOKIE_MAX_AGE,
         path=SESSION_COOKIE_PATH,
         secure=_cookies_secure(),
         httponly=CSRF_COOKIE_HTTPONLY,
@@ -296,7 +293,9 @@ def csrf_tokens_match(cookie_token: str | None, header_token: str | None) -> boo
     """Constant-time comparison of the cookie + header CSRF tokens."""
     if not cookie_token or not header_token:
         return False
-    return hmac.compare_digest(cookie_token, header_token)
+    # Issued tokens are ASCII. Encoding also makes malformed non-ASCII
+    # request headers compare unequal instead of raising TypeError.
+    return hmac.compare_digest(cookie_token.encode("utf-8"), header_token.encode("utf-8"))
 
 
 # ---------------------------------------------------------------------------

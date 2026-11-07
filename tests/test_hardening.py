@@ -738,13 +738,13 @@ class TestPackagingRegressions:
         """``pyproject.toml``'s ``[project]`` ``version`` controls the wheel
         filename. After bumping ``app.version`` we MUST bump it here too or
         the installer advertises the old project version even though the
-        FastAPI app reports the new one. Lock in 1.1.0 — bump this when
+        FastAPI app reports the new one. Lock in 1.0.4 — bump this when
         cutting a new release.
         """
         pyproject = _load_pyproject()
-        assert pyproject["project"]["version"] == "1.1.0", (
+        assert pyproject["project"]["version"] == "1.0.4", (
             "pyproject.toml [project].version must be bumped to match panel.main's "
-            f"app.version. Got {pyproject['project']['version']!r}, expected '1.1.0'."
+            f"app.version. Got {pyproject['project']['version']!r}, expected '1.0.4'."
         )
 
     def test_python_multipart_declared_as_runtime_dependency(self):
@@ -1358,7 +1358,7 @@ class TestHotfix4PostReleaseRegressions:
         stub just showed a confusing 'the wizard is forward-only…' toast
         and did nothing — Bug #7."""
         text = self._wizard_html.read_text(encoding="utf-8")
-        assert 'fetch("/api/wizard/back"' in text, (
+        assert 'this._mutatingFetch("/api/wizard/back"' in text, (
             "wizard.html back() MUST POST to /api/wizard/back (Bug #7 — "
             "Hotfix #4) — instead of the old no-op stub that toasted "
             "'the wizard is forward-only…'."
