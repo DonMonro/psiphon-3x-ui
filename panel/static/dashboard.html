@@ -131,10 +131,8 @@
     .card p { color: var(--no-text-2); line-height: 1.55; }
 
     /* ── Countries table ─────────────────────────────────────── */
-    /* Flags are small PNGs (flagcdn.com, same jsDelivr-class CDN as the rest
-       of the page) because emoji flag glyphs don't render on most Linux
-       servers' font stacks — the operator saw the raw regional-indicator
-       symbols instead. The emoji stays as alt text / broken-image fallback. */
+    /* Serve bundled flag images so a separate CDN outage cannot leave gaps.
+       Country codes and names remain visible if an image is unavailable. */
     .country-flag {
       width: 1.5rem; height: 1rem; object-fit: cover; border-radius: 3px;
       margin-right: .45rem; vertical-align: -0.15em;
@@ -411,7 +409,7 @@
           <tbody :class="{ busy: busy.countries }">
             <tr>
               <td><code x-text="c.code"></code></td>
-              <td data-col="name"><img class="country-flag" :src="'https://flagcdn.com/w40/' + c.code.toLowerCase() + '.png'" :alt="c.flag"><span x-text="c.name"></span></td>
+              <td data-col="name"><img class="country-flag" :src="'/static/flags/' + c.code.toLowerCase() + '.png'" :alt="c.flag" @error="$el.hidden = true"><span x-text="c.name"></span></td>
               <td>
                 <input type="checkbox" :checked="c.enabled"
                        @change="toggleEnabled(c, $event.target.checked)">
@@ -767,27 +765,43 @@
           this.loadHttpsStatus();
         },
 
-        _csrf: { token: "", fetched: false },
-
-        async _csrfHeaders() {
-          // Phase 7 — fetch a CSRF token on first mutating call. Re-fetch on
-          // a 403 (the server may have rotated the cookie). The cookie is set
-          // at login time but we echo it back as a header for defense-in-depth.
-          if (!this._csrf.fetched) {
-            try {
-              const r = await fetch("/auth/csrf");
-              if (r.ok) {
-                const body = await r.json();
-                this._csrf.token = body.token || "";
-                this._csrf.fetched = true;
-              }
-            } catch (e) { /* ignore — server may not enforce CSRF */ }
+        // Read the live cookie, not a token cached by this tab. Force a
+        // network refresh after a CSRF rejection, even if a cookie exists.
+        async _csrfHeaders(forceRefresh = false) {
+          const readCookie = () => {
+            const entry = document.cookie.split(";").map(row => row.trim())
+              .find(row => row.startsWith("psiphon3xui_csrf="));
+            return entry ? entry.slice("psiphon3xui_csrf=".length) : "";
+          };
+          let token = forceRefresh ? "" : readCookie();
+          if (!token) {
+            const r = await fetch("/auth/csrf", { credentials: "same-origin", cache: "no-store" });
+            if (r.status === 401) {
+              window.location.href = "/login";
+              throw new Error("session expired — sign in again");
+            }
+            if (!r.ok) throw new Error(`could not refresh CSRF token (HTTP ${r.status})`);
+            const body = await r.json();
+            // Another request may have updated the jar while JSON was read.
+            token = readCookie() || body.token;
           }
-          const fromCookie = document.cookie
-            .split("; ")
-            .find(row => row.startsWith("psiphon3xui_csrf="));
-          const token = this._csrf.token || (fromCookie ? fromCookie.split("=")[1] : "");
-          return token ? {"X-CSRF-Token": token} : {};
+          if (typeof token !== "string" || !token) throw new Error("CSRF token unavailable");
+          return { "X-CSRF-Token": token };
+        },
+
+        // Retry only the middleware's CSRF rejection (before any endpoint
+        // side effects), once. Preserve all other failures and response bodies.
+        async _mutatingFetch(url, options) {
+          const r = await fetch(url, options);
+          const method = (options?.method || "GET").toUpperCase();
+          if (r.status !== 403 || !["POST", "PUT", "PATCH", "DELETE"].includes(method)) return r;
+          let error;
+          try { error = await r.clone().json(); } catch (_) { return r; }
+          if (error?.detail !== "CSRF token missing or invalid.") return r;
+          const csrf = await this._csrfHeaders(true);
+          const headers = new Headers(options.headers);
+          headers.set("X-CSRF-Token", csrf["X-CSRF-Token"]);
+          return fetch(url, { ...options, headers });
         },
 
         // Read a fetch Response as JSON, tolerating non-JSON bodies. The
@@ -874,7 +888,7 @@
             return;
           }
           try {
-            const r = await fetch(`/api/dashboard/countries/${c.code}`, {
+            const r = await this._mutatingFetch(`/api/dashboard/countries/${c.code}`, {
               method: "PATCH",
               headers: {...(await this._csrfHeaders()), "Content-Type": "application/json"},
               body: JSON.stringify({enabled: newValue}),
@@ -935,7 +949,7 @@
           if (!c.enabled || (this.cooldown[c.code] ?? 0) > 0) return;
           this.busy.ping = c.code;
           try {
-            const r = await fetch(`/api/dashboard/countries/${c.code}/_ping`, {
+            const r = await this._mutatingFetch(`/api/dashboard/countries/${c.code}/_ping`, {
               method: "POST",
               headers: await this._csrfHeaders(),
             });
@@ -1006,7 +1020,7 @@
             payload.inbound_id = this.ports.enable_inbound_id;
           }
           try {
-            const r = await fetch(`/api/dashboard/countries/${code}`, {
+            const r = await this._mutatingFetch(`/api/dashboard/countries/${code}`, {
               method: "PATCH",
               headers: {...(await this._csrfHeaders()), "Content-Type": "application/json"},
               body: JSON.stringify(payload),
@@ -1068,7 +1082,7 @@
           this.busy.reclone = true;
           const code = this.reclone.code;
           try {
-            const r = await fetch(`/api/dashboard/countries/${code}/_reclone`, {
+            const r = await this._mutatingFetch(`/api/dashboard/countries/${code}/_reclone`, {
               method: "POST",
               headers: {...(await this._csrfHeaders()), "Content-Type": "application/json"},
               body: JSON.stringify({inbound_id: this.reclone.inbound_id}),
@@ -1102,7 +1116,7 @@
         async submitPorts() {
           this.busy.ports = true;
           try {
-            const r = await fetch(`/api/dashboard/countries/${this.ports.code}/_ports`, {
+            const r = await this._mutatingFetch(`/api/dashboard/countries/${this.ports.code}/_ports`, {
               method: "POST",
               headers: {...(await this._csrfHeaders()), "Content-Type": "application/json"},
               body: JSON.stringify({socks_port: this.ports.socks, public_port: this.ports.public}),
@@ -1156,7 +1170,7 @@
         async reapplyAll() {
           this.busy.reapply = true;
           try {
-            const r = await fetch("/api/dashboard/reapply", {
+            const r = await this._mutatingFetch("/api/dashboard/reapply", {
               method: "POST",
               headers: await this._csrfHeaders(),
             });
@@ -1176,7 +1190,7 @@
             // Hotfix #10 (Bug #2): added method:"POST" + CSRF headers.
             // The router declares @router.post("/backup") — without an
             // explicit method the browser sends GET → FastAPI 405.
-            const r = await fetch("/api/dashboard/backup", {
+            const r = await this._mutatingFetch("/api/dashboard/backup", {
               method: "POST",
               headers: await this._csrfHeaders(),
             });
@@ -1204,7 +1218,7 @@
           const fd = new FormData();
           fd.append("file", file);
           try {
-            const r = await fetch("/api/dashboard/restore", {
+            const r = await this._mutatingFetch("/api/dashboard/restore", {
               method: "POST",
               headers: await this._csrfHeaders(),
               body: fd,
@@ -1224,9 +1238,7 @@
 
         // ---- Credentials cards (username + password) -------------------
         _errorMessage(body, status) {
-          // FastAPI 422 details are arrays, not strings. Read only messages
-          // and known field names: validation records can include passwords
-          // in their `input` / `ctx` properties, which must not reach a toast.
+          // Validation records can carry passwords; only messages and known field labels are safe.
           const fields = {
             current_username: "Current admin username",
             current_password: "Current password",
@@ -1262,7 +1274,7 @@
           }
           this.busy.user = true;
           try {
-            const r = await fetch("/api/dashboard/change-username", {
+            const r = await this._mutatingFetch("/api/dashboard/change-username", {
               method: "POST",
               headers: {...(await this._csrfHeaders()), "Content-Type": "application/json"},
               body: JSON.stringify({
@@ -1304,7 +1316,7 @@
           }
           this.busy.rotate = true;
           try {
-            const r = await fetch("/api/dashboard/rotate-password", {
+            const r = await this._mutatingFetch("/api/dashboard/rotate-password", {
               method: "POST",
               headers: {...(await this._csrfHeaders()), "Content-Type": "application/json"},
               body: JSON.stringify({
@@ -1330,7 +1342,7 @@
         async changePanelPort() {
           this.busy.port = true;
           try {
-            const r = await fetch("/api/dashboard/change-panel-port", {
+            const r = await this._mutatingFetch("/api/dashboard/change-panel-port", {
               method: "POST",
               headers: {...(await this._csrfHeaders()), "Content-Type": "application/json"},
               body: JSON.stringify({new_port: this.port.new}),
@@ -1369,7 +1381,7 @@
         async applyHttps() {
           this.busy.tls = true;
           try {
-            const r = await fetch("/api/dashboard/https-settings", {
+            const r = await this._mutatingFetch("/api/dashboard/https-settings", {
               method: "POST",
               headers: {...(await this._csrfHeaders()), "Content-Type": "application/json"},
               body: JSON.stringify({cert_path: this.tls.cert, key_path: this.tls.key}),
@@ -1391,7 +1403,7 @@
         async disableHttps() {
           this.busy.tls = true;
           try {
-            const r = await fetch("/api/dashboard/https-settings", {
+            const r = await this._mutatingFetch("/api/dashboard/https-settings", {
               method: "POST",
               headers: {...(await this._csrfHeaders()), "Content-Type": "application/json"},
               body: JSON.stringify({cert_path: "", key_path: ""}),
@@ -1450,7 +1462,7 @@
   <a class="version-badge" href="https://github.com/DonMonro/psiphon-3x-ui" target="_blank" rel="noopener">
     <!-- GitHub mark (official octocat path, simplified) -->
     <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
-    <span>v1.0.3</span>
+    <span>v1.0.4</span>
   </a>
 </body>
 </html>

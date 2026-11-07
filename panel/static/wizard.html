@@ -171,9 +171,8 @@
     .country-grid label:has(input:checked) { border-color: var(--no-accent-hi);
                                              background: rgba(37,99,235,.10); }
     .country-grid input:disabled + span { opacity: .5; }
-    /* Flags are small PNGs (flagcdn.com) because emoji flag glyphs don't
-       render on most Linux servers' font stacks — the operator saw the raw
-       regional-indicator symbols instead. Emoji stays as alt text. */
+    /* Serve bundled flag images so a separate CDN outage cannot leave gaps.
+       Country codes and names remain visible if an image is unavailable. */
     .country-flag {
       width: 1.5rem; height: 1rem; object-fit: cover; border-radius: 3px;
       margin-right: .4rem; vertical-align: -0.15em;
@@ -330,7 +329,7 @@
             <input type="checkbox" :value="c.code" x-model="form.countries.codes"
                    :disabled="form.countries.mode !== 'specific'">
             <span><code x-text="c.code"></code>
-                  <img class="country-flag" :src="'https://flagcdn.com/w40/' + c.code.toLowerCase() + '.png'" :alt="c.flag"><span x-text="c.name"></span></span>
+                  <img class="country-flag" :src="'/static/flags/' + c.code.toLowerCase() + '.png'" :alt="c.flag" @error="$el.hidden = true"><span x-text="c.name"></span></span>
           </label>
         </template>
       </div>
@@ -570,27 +569,44 @@
         apply: { progress: 0, lines: [] },
         clone: { progress: 0, lines: [] },
 
-        _csrf: { token: "", fetched: false },
         _logSeq: 0,
 
-        // ── CSRF ─────────────────────────────────────────────────
-        async _csrfHeaders() {
-          // Match panel.static.dashboard's pattern: lazily fetch /auth/csrf
-          // once, fall back to the cookie value, re-fetch on a 403 elsewhere.
-          if (!this._csrf.fetched) {
-            try {
-              const r = await fetch("/auth/csrf");
-              if (r.ok) {
-                this._csrf.token = (await r.json()).token || "";
-                this._csrf.fetched = true;
-              } else if (r.status === 401) { this.redirectLogin(); }
-            } catch (e) { /* CSRF may be disabled server-side */ }
+        // Read the live cookie, not a token cached by this tab. Force a
+        // network refresh after a CSRF rejection, even if a cookie exists.
+        async _csrfHeaders(forceRefresh = false) {
+          const readCookie = () => {
+            const entry = document.cookie.split(";").map(row => row.trim())
+              .find(row => row.startsWith("psiphon3xui_csrf="));
+            return entry ? entry.slice("psiphon3xui_csrf=".length) : "";
+          };
+          let token = forceRefresh ? "" : readCookie();
+          if (!token) {
+            const r = await fetch("/auth/csrf", { credentials: "same-origin", cache: "no-store" });
+            if (r.status === 401) {
+              this.redirectLogin();
+              throw new Error("session expired — sign in again");
+            }
+            if (!r.ok) throw new Error(`could not refresh CSRF token (HTTP ${r.status})`);
+            const body = await r.json();
+            // Another request may have updated the jar while JSON was read.
+            token = readCookie() || body.token;
           }
-          const fromCookie = document.cookie
-            .split("; ")
-            .find(row => row.startsWith("psiphon3xui_csrf="));
-          const token = this._csrf.token || (fromCookie ? fromCookie.split("=")[1] : "");
-          return token ? { "X-CSRF-Token": token } : {};
+          if (typeof token !== "string" || !token) throw new Error("CSRF token unavailable");
+          return { "X-CSRF-Token": token };
+        },
+
+        // Retry only the middleware's CSRF rejection (before any endpoint
+        // side effects), once. Preserve all other failures and response bodies.
+        async _mutatingFetch(url, options) {
+          const r = await fetch(url, options);
+          const method = (options?.method || "GET").toUpperCase();
+          if (r.status !== 403 || !["POST", "PUT", "PATCH", "DELETE"].includes(method)) return r;
+          const error = await this._safeJson(r.clone());
+          if (error?.detail !== "CSRF token missing or invalid.") return r;
+          const csrf = await this._csrfHeaders(true);
+          const headers = new Headers(options.headers);
+          headers.set("X-CSRF-Token", csrf["X-CSRF-Token"]);
+          return fetch(url, { ...options, headers });
         },
 
         // ── Boot ─────────────────────────────────────────────────
@@ -710,7 +726,7 @@
             const body = { mode: this.form.countries.mode,
                            codes: this.form.countries.mode === "specific"
                                   ? [...this.form.countries.codes] : [] };
-            const r = await fetch("/api/wizard/countries", {
+            const r = await this._mutatingFetch("/api/wizard/countries", {
               method: "POST",
               credentials: "same-origin",
               headers: { ...(await this._csrfHeaders()), "Content-Type": "application/json" },
@@ -739,7 +755,7 @@
               assignment: this.form.ports.assignment,
               use_recommendation: this.form.ports.use_recommendation,
             };
-            const r = await fetch("/api/wizard/ports", {
+            const r = await this._mutatingFetch("/api/wizard/ports", {
               method: "POST",
               credentials: "same-origin",
               headers: { ...(await this._csrfHeaders()), "Content-Type": "application/json" },
@@ -784,7 +800,7 @@
         async runXuiDetect() {
           this.busy = true;
           try {
-            const r = await fetch("/api/wizard/xui-detect", {
+            const r = await this._mutatingFetch("/api/wizard/xui-detect", {
               method: "POST",
               credentials: "same-origin",
               headers: await this._csrfHeaders(),
@@ -822,7 +838,7 @@
               this.notify("all three fields (base_url, username, password) are required", "err");
               return;
             }
-            const r = await fetch("/api/wizard/xui-creds", {
+            const r = await this._mutatingFetch("/api/wizard/xui-creds", {
               method: "POST",
               credentials: "same-origin",
               headers: { ...(await this._csrfHeaders()), "Content-Type": "application/json" },
@@ -869,7 +885,7 @@
               this.notify("pick one inbound from the list first", "err");
               return;
             }
-            const r = await fetch("/api/wizard/clone-template", {
+            const r = await this._mutatingFetch("/api/wizard/clone-template", {
               method: "POST",
               credentials: "same-origin",
               headers: { ...(await this._csrfHeaders()), "Content-Type": "application/json" },
@@ -984,7 +1000,7 @@
           this.busy = true;
           try {
             const payload = body || {};
-            const r = await fetch("/api/wizard/back", {
+            const r = await this._mutatingFetch("/api/wizard/back", {
               method: "POST",
               credentials: "same-origin",
               headers: { ...(await this._csrfHeaders()), "Content-Type": "application/json" },
@@ -1078,7 +1094,7 @@
   <a class="version-badge" href="https://github.com/DonMonro/psiphon-3x-ui" target="_blank" rel="noopener">
     <!-- GitHub mark (official octocat path, simplified) -->
     <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
-    <span>v1.0.3</span>
+    <span>v1.0.4</span>
   </a>
 </body>
 </html>

@@ -747,6 +747,23 @@ class TestPackagingRegressions:
             f"app.version. Got {pyproject['project']['version']!r}, expected '1.0.4'."
         )
 
+    def test_runtime_versions_match_package_version(self):
+        from panel import __version__
+        from panel.main import app
+
+        version = _load_pyproject()["project"]["version"]
+        assert __version__ == app.version == version
+
+    @pytest.mark.parametrize("page", ["login.html", "wizard.html", "dashboard.html"])
+    def test_page_footer_versions_match_package_version(self, page):
+        version = _load_pyproject()["project"]["version"]
+        html = (Path(__file__).resolve().parents[1] / "panel" / "static" / page).read_text(
+            encoding="utf-8"
+        )
+        badge = re.search(r'<a class="version-badge"[^>]*>.*?<span>([^<]+)</span>', html, re.DOTALL)
+        assert badge is not None, f"Version badge is missing from {page}"
+        assert badge.group(1) == f"v{version}", f"Version badge in {page} must match {version}"
+
     def test_python_multipart_declared_as_runtime_dependency(self):
         """``@router.post('/restore')`` in :mod:`panel.dashboard.router` declares
         ``UploadFile = File(...)`` which triggers FastAPI's import-time
