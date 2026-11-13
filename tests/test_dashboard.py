@@ -56,6 +56,11 @@ def _isolated_env(tmp_path: Path, monkeypatch) -> None:
     config.load_countries.cache_clear()
     db._engine = None  # noqa: SLF001
     db._session_factory = None  # noqa: SLF001
+    # Another test may have imported the app before this env was installed.
+    # Isolate the boot-cached CSRF override as well as the environment value.
+    from panel import main
+
+    monkeypatch.setattr(main, "_CSRF_ENFORCE", False)
 
 
 def _seed_settings(*, wizard_completed: bool = True) -> None:
@@ -2671,26 +2676,105 @@ class TestHttpsSettingsPanel:
         assert body["applied"] is False
         assert calls == [], "no-op disable must not rewrite env or restart"
 
-    def test_enable_when_already_enabled_same_paths_short_circuits(self, monkeypatch, tmp_path):
-        client = _client(monkeypatch, tmp_path)
-        _login(client)
-        monkeypatch.setenv("PSIPHON3XUI_TLS_CERT", "/etc/ssl/a.pem")
-        monkeypatch.setenv("PSIPHON3XUI_TLS_KEY", "/etc/ssl/b.pem")
-        monkeypatch.setenv("PSIPHON3XUI_HTTPS_ONLY", "true")
+    @staticmethod
+    def _set_tls_env(monkeypatch, cert, key):
         from panel import config
 
+        monkeypatch.setenv("PSIPHON3XUI_TLS_CERT", cert.as_posix())
+        monkeypatch.setenv("PSIPHON3XUI_TLS_KEY", key.as_posix())
+        monkeypatch.setenv("PSIPHON3XUI_HTTPS_ONLY", "true")
         config.get_settings.cache_clear()
-        calls = _stub_https_host(monkeypatch)
 
+    def test_unchanged_paths_and_certificate_are_a_true_noop(
+        self, monkeypatch, tmp_path, tls_controller_factory
+    ):
+        cert, key, _, _ = tls_controller_factory()
+        client = _client(monkeypatch, tmp_path)
+        _login(client)
+        self._set_tls_env(monkeypatch, cert, key)
+        calls = _stub_https_host(monkeypatch)
         r = client.post(
             "/api/dashboard/https-settings",
-            json={"cert_path": "/etc/ssl/a.pem", "key_path": "/etc/ssl/b.pem"},
+            json={"cert_path": cert.as_posix(), "key_path": key.as_posix()},
         )
         assert r.status_code == 200, r.text
+        assert r.json()["applied"] is False
+        assert "certificate unchanged" in r.json()["note"]
+        assert calls == [], "an identical serving pair must not restart the panel"
+
+    def test_renewed_certificate_at_same_paths_is_not_skipped(
+        self, monkeypatch, tmp_path, tls_controller_factory, tls_pair_factory
+    ):
+        cert, key, _, _ = tls_controller_factory()
+        client = _client(monkeypatch, tmp_path)
+        _login(client)
+        self._set_tls_env(monkeypatch, cert, key)
+        tls_pair_factory()  # issuer replaces the files, not the paths
+        calls = _stub_https_host(monkeypatch)
+        r = client.post(
+            "/api/dashboard/https-settings",
+            json={"cert_path": cert.as_posix(), "key_path": key.as_posix()},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["applied"] is True
+        assert [item[0] for item in calls] == ["preflight", "env", "restart"]
+
+    def test_get_distinguishes_active_certificate_from_invalid_disk_renewal(
+        self, monkeypatch, tmp_path, tls_controller_factory, tls_pair_factory
+    ):
+        cert, key, controller, _ = tls_controller_factory()
+        client = _client(monkeypatch, tmp_path)
+        _login(client)
+        self._set_tls_env(monkeypatch, cert, key)
+        active_expiry = controller.current.certificate.not_after.isoformat()
+        tls_pair_factory(days=-1)
+        assert controller.reload()["reloaded"] is False
+        r = client.get("/api/dashboard/https-settings")
+        assert r.status_code == 200, r.text
         body = r.json()
-        assert body["applied"] is False
-        assert body["enabled"] is True
-        assert calls == [], "no-op enable must not restart the service"
+        assert body["tls_active"] is True
+        assert body["cert_expired"] is True
+        assert body["active_cert_expired"] is False
+        assert body["active_cert_not_after"] == active_expiry
+        assert body["renewal_pending"] is True
+        assert body["auto_reload_enabled"] is True
+        assert body["reload_interval_seconds"] == 60
+        assert "expired" in body["reload_error"]
+        assert body["last_reload_at"]
+
+    def test_expired_certificate_is_refused_without_env_or_service_changes(
+        self, monkeypatch, tmp_path, tls_pair_factory
+    ):
+        from panel.dashboard import router as dashboard_router
+
+        cert, key = tls_pair_factory(days=-1)
+        client = _client(monkeypatch, tmp_path)
+        _login(client)
+        calls = []
+        monkeypatch.setattr(
+            dashboard_router, "_update_panel_env_tls", lambda *a: calls.append("env")
+        )
+        monkeypatch.setattr(
+            dashboard_router, "_restart_panel_service", lambda *a: calls.append("restart")
+        )
+        r = client.post(
+            "/api/dashboard/https-settings",
+            json={"cert_path": cert.as_posix(), "key_path": key.as_posix()},
+        )
+        assert r.status_code == 400, r.text
+        assert "expired" in r.json()["detail"]
+        assert calls == []
+
+    @pytest.mark.parametrize("invalid", ["bad\0path", "bad\npath", "bad\rpath"])
+    def test_path_control_characters_are_refused(self, monkeypatch, tmp_path, invalid):
+        client = _client(monkeypatch, tmp_path)
+        _login(client)
+        calls = _stub_https_host(monkeypatch)
+        r = client.post(
+            "/api/dashboard/https-settings", json={"cert_path": invalid, "key_path": "/etc/key.pem"}
+        )
+        assert r.status_code == 400, r.text
+        assert calls == []
 
     def test_https_settings_require_auth(self, monkeypatch, tmp_path):
         client = _client(monkeypatch, tmp_path)

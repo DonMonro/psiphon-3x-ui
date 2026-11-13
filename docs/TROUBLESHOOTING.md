@@ -51,6 +51,29 @@ Then re-run `sudo bash /path/to/install.sh` (idempotent — it will rebuild).
   `Settings` row — a fresh `--password` will replace the bcrypt hash) or
   `${VENV_DIR}/bin/python -m panel.seed --port ... --user ... --password ...` directly.
 
+### TLS certificate renewal
+
+Renewed PEM files at unchanged paths are picked up automatically by the panel's
+managed TLS listener. The Settings card reports the **active** certificate's
+expiry separately from the certificate on disk, and shows any reload error.
+Invalid/mismatched pairs are retried without replacing the serving context.
+
+- The existing certificate issuer must actually renew and deploy both files;
+  this panel does not renew a license/subscription or request new certificates.
+- For `/root/cert` and `/opt/psiphon-3x-ui/tls`, the installed
+  `psiphon-cert-perms.timer` repairs root-only PEM permissions every minute.
+  Private keys stay group-readable only. External symlink targets are not
+  modified; put actual PEMs in a managed tree or keep other paths readable.
+- Look for `TLS certificate renewed automatically` or a retained-certificate
+  warning in the panel journal. If a renewed source pair is valid/readable,
+  new handshakes normally pick it up within a minute (about two minutes if a
+  permission repair was needed).
+- Configured HTTPS waits for usable files on boot instead of downgrading to
+  HTTP. A missing or broken file is reported in the journal while it retries.
+- If a fresh connection still receives a different certificate after a
+  successful reload, check whether nginx/Caddy or 3x-ui, rather than this panel,
+  terminates TLS on that hostname/port. Their certificates are separate.
+
 ### Uninstall reports `PANEL_PORT: unbound variable`
 
 Older uninstall code used a variable populated only by the installation

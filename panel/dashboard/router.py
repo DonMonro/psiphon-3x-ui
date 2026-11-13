@@ -30,7 +30,6 @@ import io
 import json
 import logging
 import re
-import ssl
 import subprocess
 import tarfile
 from datetime import datetime, timezone
@@ -42,6 +41,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, StrictInt, field_validator
 from sqlalchemy.orm import Session
 
+from .. import runtime, tls_reload
 from ..auth import decrypt_creds, get_current_user, hash_password, verify_password
 from ..config import get_settings
 from ..db import get_db
@@ -443,24 +443,16 @@ def _update_panel_env_port(new_port: int) -> tuple[bool, str]:
 DEFAULT_TLS_CERT_PATH = "/root/cert/ip/fullchain.pem"
 DEFAULT_TLS_KEY_PATH = "/root/cert/ip/privkey.pem"
 
-# Shared remediation tail for every HTTPS preflight failure whose root cause
-# is "the panel process cannot read that path". Two layers can produce it:
-# plain filesystem permissions (provisioning tools write privkey.pem 0600
-# root:root) and the unit's ProtectHome=tmpfs sandbox, which bind-mounts ONLY
-# /root/cert into the service namespace and masks the rest of /root, /home
-# and /run/user entirely — so a pair kept under /root/cert just needs the
-# chmod, while a pair anywhere else under /root genuinely must move.
+# Only /root/cert is exposed through ProtectHome; its permissions are repaired automatically.
 _TLS_READ_REMEDIATION = (
     "The panel service runs as the unprivileged psiphon3xui user behind the "
-    "unit's ProtectHome sandbox: the service can see ONLY the /root/cert "
-    "directory (read-only bind mount) — the rest of /root, /home and "
-    "/run/user are masked. If the pair lives under /root/cert, make the "
-    "tree readable: `sudo chmod -R a+rX /root/cert` (safe — /root itself "
-    "stays 0700 root-only, so no other host user can traverse to it; cert "
-    "renewals re-write privkey.pem as 0600, so re-run the chmod after each "
-    "renewal). If the pair lives anywhere else under /root, move it into "
-    "/root/cert (e.g. /root/cert/ip/fullchain.pem + privkey.pem) or to "
-    "/opt/psiphon-3x-ui/tls/, then enter that path here."
+    "unit's ProtectHome sandbox: only /root/cert is exposed from /root. "
+    "The installed psiphon-cert-perms.timer automatically grants group-read "
+    "access to root-owned PEM files under /root/cert and /opt/psiphon-3x-ui/tls "
+    "after renewals. No manual chmod or restart is needed. If this error "
+    "persists, check psiphon-cert-perms.service: source files must be in those "
+    "managed trees, not symlinks to files outside them. Other certificate "
+    "locations must remain readable by the panel service user."
 )
 
 
@@ -483,21 +475,7 @@ def _safe_is_file(p: Path) -> bool:
 
 
 def _tls_preflight(cert: Path, key: Path) -> tuple[bool, str]:
-    """Verify a TLS cert/key pair is usable BEFORE panel.env is rewritten.
-
-    A pair that exists but is unreadable or invalid would make uvicorn die at
-    bind time on the next restart — and the unit's ``Restart=on-abort`` policy
-    does NOT retry a plain exit-1, so the panel would be gone from its port
-    with no in-band way back. Checks, in order:
-
-    1. both files exist (and are visible to THIS process — an untraversable
-       parent directory like 0700 /root makes even existence unknowable, so
-       that failure is reported here, not as a 500);
-    2. both are readable by THIS (unprivileged) process — the common failure
-       is certs under ``/root/`` that only root can traverse;
-    3. the pair actually loads as a TLS cert chain (openssl-grade validation
-       without shelling out).
-    """
+    """Check readability, matching key and certificate validity before persisting TLS."""
     for label, p in (("public key", cert), ("private key", key)):
         try:
             if not p.is_file():
@@ -518,11 +496,9 @@ def _tls_preflight(cert: Path, key: Path) -> tuple[bool, str]:
                 f"{label} at {p} is not readable by the panel process "
                 f"({type(exc).__name__}: {exc}). {_TLS_READ_REMEDIATION}"
             )
-    try:
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        ctx.load_cert_chain(str(cert), str(key))
-    except (OSError, ssl.SSLError) as exc:
-        return False, f"cert/key pair failed to load: {type(exc).__name__}: {exc}"
+    ok, detail = tls_reload.validate_pair(cert, key)
+    if not ok:
+        return False, f"cert/key pair failed to load: {detail}"
     return True, f"TLS pair OK ({cert}, {key})"
 
 
@@ -762,8 +738,10 @@ class HttpsSettingsBody(BaseModel):
     vice versa — would make the next restart unbindable).
     """
 
-    cert_path: str = Field(default="", description="public key / fullchain PEM path")
-    key_path: str = Field(default="", description="private key PEM path")
+    cert_path: str = Field(
+        default="", max_length=4096, description="certificate / fullchain PEM path"
+    )
+    key_path: str = Field(default="", max_length=4096, description="private key PEM path")
 
 
 # ---------------------------------------------------------------------------
@@ -2302,6 +2280,15 @@ def get_https_settings(
     # not host-filesystem objects of whatever box happens to run the tests.
     cert = settings.tls_cert.as_posix() if settings.tls_cert else DEFAULT_TLS_CERT_PATH
     key = settings.tls_key.as_posix() if settings.tls_key else DEFAULT_TLS_KEY_PATH
+
+    # Report the source file and the actually serving certificate separately:
+    # a valid renewed file on disk does not prove that it is already active.
+    cert_path = Path(cert)
+    expiry = tls_reload.read_cert_expiry(cert_path) if _safe_is_file(cert_path) else None
+    disk_fp = tls_reload.pair_fingerprint(cert_path, Path(key))
+    controller = runtime.get_tls_controller()
+    active = controller.current if controller else None
+    renewal_pending = bool(active and disk_fp is not None and disk_fp != active.digest)
     return {
         "enabled": bool(settings.tls_cert and settings.tls_key),
         "https_only": bool(settings.https_only),
@@ -2312,6 +2299,22 @@ def get_https_settings(
         # raise PermissionError → plain-text 500 on every card load.
         "cert_exists": _safe_is_file(Path(cert)),
         "key_exists": _safe_is_file(Path(key)),
+        # ISO-8601 UTC, or None when unreadable/not parseable.
+        "cert_not_after": expiry.isoformat() if expiry else None,
+        "cert_expired": bool(expiry is not None and expiry <= datetime.now(timezone.utc)),
+        # True = a changed pair sits on disk that the live context has not
+        # loaded yet (the watchdog picks it up within
+        # PSIPHON3XUI_TLS_RELOAD_INTERVAL; a card re-apply forces it now).
+        "renewal_pending": renewal_pending,
+        "tls_active": active is not None,
+        "active_cert_not_after": active.certificate.not_after.isoformat() if active else None,
+        "active_cert_expired": bool(
+            active and active.certificate.not_after <= datetime.now(timezone.utc)
+        ),
+        "auto_reload_enabled": bool(active and settings.tls_reload_interval > 0),
+        "reload_interval_seconds": settings.tls_reload_interval,
+        "last_reload_at": active.applied_at.isoformat() if active else None,
+        "reload_error": controller.last_error if controller else None,
     }
 
 
@@ -2333,8 +2336,17 @@ def set_https_settings(
     * exactly one path → 400 (a half-pair would strand the panel at bind).
     * both paths → preflight (exists / readable / pair loads) BEFORE any
       write; an unreadable or mismatched pair is a 400 with nothing mutated.
+    * both paths matching the current config → no-op ONLY when the on-disk
+      pair's fingerprint is also unchanged (Phase 30); a renewed pair at the
+      same paths falls through to the full pipeline so a card re-apply
+      forces an immediate reload. The panel.tls_reload watchdog picks up
+      renewals automatically either way.
     """
     _require_wizard_completed(db)
+    if any(char in value for value in (body.cert_path, body.key_path) for char in "\0\r\n"):
+        raise HTTPException(
+            status_code=400, detail="invalid path: NULs and line breaks are not allowed"
+        )
     cert_in = body.cert_path.strip()
     key_in = body.key_path.strip()
 
@@ -2374,19 +2386,23 @@ def set_https_settings(
         )
 
     settings = get_settings()
-    if (
+    # Identical paths are only a no-op when their CONTENT matches the pair
+    # currently serving. Renewals at the same paths must never be skipped.
+    same_paths = bool(
         settings.tls_cert
         and settings.tls_key
         and settings.tls_cert.as_posix() == cert_in
         and settings.tls_key.as_posix() == key_in
         and settings.https_only
-    ):
+    )
+    disk_fp = tls_reload.pair_fingerprint(Path(cert_in), Path(key_in))
+    if same_paths and disk_fp is not None and disk_fp == tls_reload.last_applied_fingerprint():
         return {
             "applied": False,
             "enabled": True,
             "cert_path": cert_in,
             "key_path": key_in,
-            "note": "HTTPS is already enabled with these paths",
+            "note": "HTTPS is already enabled with these paths (certificate unchanged)",
         }
 
     # Path() raises ValueError on embedded NULs (a pasted-garbage path) —
@@ -2401,9 +2417,7 @@ def set_https_settings(
             detail=f"invalid path: {exc}",
         ) from exc
 
-    # Preflight BEFORE writing anything: a bad pair that slips through would
-    # crash uvicorn at bind on restart (Restart=on-abort does not retry a
-    # plain exit-1) and leave the panel unreachable on both schemes.
+    # An unusable configured pair leaves startup waiting without opening a plaintext listener.
     preflight_ok, preflight_detail = _tls_preflight(cert, key)
     if not preflight_ok:
         raise HTTPException(
@@ -2430,6 +2444,8 @@ def set_https_settings(
         f"systemctl restart psiphon-3x-ui.service {'OK' if svc_ok else 'FAILED'}"
         + (f" — {svc_detail}" if svc_detail else ""),
     ]
+    if same_paths:
+        note_bits.append("certificate settings reapplied from the existing paths")
     return {
         "applied": True,
         "enabled": True,

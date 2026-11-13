@@ -15,8 +15,8 @@ its own dedicated test class:
   the threshold trips, cleared after successful login).
 * :class:`TestHttpsSettings` — confirms :class:`panel.config.Settings.tls_cert` /
   :attr:`https_only` wire into cookie Secure flags and that
-  :mod:`panel.__main__` passes ``ssl_certfile``/``ssl_keyfile`` to uvicorn
-  only when both files exist.
+  :mod:`panel.__main__` configures a managed TLS listener and never silently
+  downgrades configured HTTPS to HTTP when files are unavailable.
 * :class:`TestI18nModule` — :func:`panel.i18n.load_locale`, :func:`t` with
   interpolation, :func:`available_locales`.
 * :class:`TestI18nEndpoint` — ``GET /api/i18n/{locale}`` returns the bundled
@@ -375,21 +375,25 @@ class TestHttpsSettings:
         set_cookie = response.headers.get("set-cookie", "")
         assert "Secure" not in set_cookie
 
-    def test_uvicorn_ssl_args_injected_when_cert_present(self, monkeypatch, tmp_path):
-        # Build a temp cert + key + write paths; verify __main__ wraps them.
+    @staticmethod
+    def _capture_server(monkeypatch):
         import panel.__main__ as m
 
-        cert = tmp_path / "cert.pem"
-        key = tmp_path / "key.pem"
-        cert.write_text("FAKE-CERT")
-        key.write_text("FAKE-KEY")
-        # Capture the dict passed to uvicorn.run.
-        captured: dict = {}
+        captured = {}
 
-        def fake_run(app_str, **kwargs):
-            captured.update(kwargs)
+        class FakeServer:
+            def __init__(self, config):
+                captured["config"] = config
 
-        monkeypatch.setattr(m.uvicorn, "run", fake_run)
+            def run(self):
+                captured["run"] = True
+
+        monkeypatch.setattr(m, "TLSServer", FakeServer)
+        return m, captured
+
+    def test_uvicorn_ssl_args_injected_when_cert_present(self, monkeypatch, tmp_path):
+        m, captured = self._capture_server(monkeypatch)
+        cert, key = tmp_path / "cert.pem", tmp_path / "key.pem"
         monkeypatch.setattr(
             m,
             "get_settings",
@@ -403,20 +407,16 @@ class TestHttpsSettings:
             ),
         )
         m.main()
-        assert captured.get("ssl_certfile") == str(cert)
-        assert captured.get("ssl_keyfile") == str(key)
-        assert captured.get("host") == "0.0.0.0"
-        assert captured.get("port") == 18443
+        config = captured["config"]
+        assert config.ssl_certfile == str(cert)
+        assert config.ssl_keyfile == str(key)
+        assert config.host == "0.0.0.0"
+        assert config.port == 18443
+        assert captured["run"] is True
+        assert not config.loaded, "only the serving worker initializes SSL state"
 
-    def test_uvicorn_omits_ssl_when_cert_missing(self, monkeypatch, tmp_path):
-        import panel.__main__ as m
-
-        captured: dict = {}
-
-        def fake_run(app_str, **kwargs):
-            captured.update(kwargs)
-
-        monkeypatch.setattr(m.uvicorn, "run", fake_run)
+    def test_uvicorn_omits_ssl_when_tls_is_unconfigured(self, monkeypatch, tmp_path):
+        m, captured = self._capture_server(monkeypatch)
         monkeypatch.setattr(
             m,
             "get_settings",
@@ -430,36 +430,81 @@ class TestHttpsSettings:
             ),
         )
         m.main()
-        assert "ssl_certfile" not in captured
-        assert "ssl_keyfile" not in captured
+        assert captured["config"].is_ssl is False
 
-    def test_uvicorn_skips_ssl_when_files_absent(self, monkeypatch, tmp_path):
-        """Settings have tls_cert set but the file path doesn't exist."""
-        import panel.__main__ as m
-
-        captured: dict = {}
-
-        def fake_run(app_str, **kwargs):
-            captured.update(kwargs)
-
-        monkeypatch.setattr(m.uvicorn, "run", fake_run)
+    def test_missing_files_never_clear_configured_tls(self, monkeypatch, tmp_path):
+        m, captured = self._capture_server(monkeypatch)
+        cert, key = tmp_path / "absent.pem", tmp_path / "absent.key"
         monkeypatch.setattr(
             m,
             "get_settings",
             lambda: _FakeSettings(
                 host="0.0.0.0",
                 port=18001,
-                tls_cert=tmp_path / "nope.pem",
-                tls_key=tmp_path / "nope.key",
+                tls_cert=cert,
+                tls_key=key,
                 https_only=True,
                 debug=False,
             ),
         )
         m.main()
-        # Since the cert files don't actually exist on disk, we expect a
-        # fallback to plain HTTP.
-        assert "ssl_certfile" not in captured
-        assert "ssl_keyfile" not in captured
+        assert captured["config"].is_ssl is True
+        assert captured["config"].ssl_certfile == str(cert)
+        assert captured["config"].ssl_keyfile == str(key)
+
+    def test_half_configured_tls_is_refused(self, monkeypatch, tmp_path):
+        m, captured = self._capture_server(monkeypatch)
+        monkeypatch.setattr(
+            m,
+            "get_settings",
+            lambda: _FakeSettings(
+                host="0.0.0.0",
+                port=18001,
+                tls_cert=tmp_path / "cert.pem",
+                tls_key=None,
+                https_only=True,
+                debug=False,
+            ),
+        )
+        with pytest.raises(ValueError, match="both TLS"):
+            m.main()
+        assert captured == {}
+
+    def test_debug_mode_runs_reload_supervisor_with_unloaded_config(self, monkeypatch, tmp_path):
+        m, captured = self._capture_server(monkeypatch)
+        monkeypatch.setattr(
+            m,
+            "get_settings",
+            lambda: _FakeSettings(
+                host="127.0.0.1",
+                port=18001,
+                tls_cert=tmp_path / "cert.pem",
+                tls_key=tmp_path / "key.pem",
+                https_only=True,
+                debug=True,
+            ),
+        )
+
+        class FakeSocket:
+            def close(self):
+                captured["closed"] = True
+
+        sock = FakeSocket()
+        monkeypatch.setattr(m.TLSConfig, "bind_socket", lambda self: sock)
+
+        class FakeSupervisor:
+            def __init__(self, config, target, sockets):
+                assert not config.loaded
+                assert sockets == [sock]
+                captured["supervisor"] = True
+
+            def run(self):
+                captured["reload-run"] = True
+
+        monkeypatch.setattr(m, "ChangeReload", FakeSupervisor)
+        m.main()
+        assert captured["supervisor"] and captured["reload-run"] and captured["closed"]
+        assert "run" not in captured
 
 
 class _FakeSettings:
@@ -738,13 +783,13 @@ class TestPackagingRegressions:
         """``pyproject.toml``'s ``[project]`` ``version`` controls the wheel
         filename. After bumping ``app.version`` we MUST bump it here too or
         the installer advertises the old project version even though the
-        FastAPI app reports the new one. Lock in 1.0.4 — bump this when
+        FastAPI app reports the new one. Lock in 1.0.5 — bump this when
         cutting a new release.
         """
         pyproject = _load_pyproject()
-        assert pyproject["project"]["version"] == "1.0.4", (
+        assert pyproject["project"]["version"] == "1.0.5", (
             "pyproject.toml [project].version must be bumped to match panel.main's "
-            f"app.version. Got {pyproject['project']['version']!r}, expected '1.0.4'."
+            f"app.version. Got {pyproject['project']['version']!r}, expected '1.0.5'."
         )
 
     def test_runtime_versions_match_package_version(self):
@@ -1021,42 +1066,13 @@ class TestHotfix3PostReleaseRegressions:
     def _readme(self) -> Path:
         return self._repo_root / "README.md"
 
-    # ---- Bug #1: INSTALL_PREFIX group-writable (chmod 2775, setgid) ----
+    # ---- INSTALL_PREFIX remains group-writable for SQLite sidecars ----
     def test_prepare_user_chmods_install_prefix_group_writable(self):
-        """``installer/prepare_user.sh`` MUST chmod the INSTALL_PREFIX
-        group-writable — not 0750 (group r-x). SQLite needs directory-level
-        WRITE access to create the -wal / -shm / -journal sidecar files
-        next to panel.db; the service uid (in group `psiphon3xui`) couldn't
-        create them with 0750, so the first INSERT INTO wizard blew up as
-        `sqlite3.OperationalError: attempt to write a readonly database`
-        (see Hotfix #3 Bug #1 + the journalctl traceback pasted by the
-        operator). Lock the chmod mode in source so a future edit reverting
-        it is caught here, not on the next operator install.
-
-        The mode itself evolved after Hotfix #3: bare 0770 (Hotfix #3) →
-        2775 (Hotfix #11, setgid so new files inherit the psiphon3xui
-        group; Hotfix #12 relies on that for the tunnel unit's
-        ExecStartPre mkdir). Pin the current 2775 form.
-        """
+        """Sticky preserves root-owned TLS entries while SQLite creates its own sidecars."""
         text = self._prepare_user_sh.read_text(encoding="utf-8")
-        # The fix uses the literal `chmod 2775 "${INSTALL_PREFIX}"` line; the
-        # repo also chmods CONFIG_DIR (2775) + BIN_DIR (0750) so check the
-        # INSTALL_PREFIX form specifically — that's the directory that holds
-        # panel.db.
-        assert 'chmod 2775 "${INSTALL_PREFIX}"' in text, (
-            "installer/prepare_user.sh MUST chmod INSTALL_PREFIX to 2775 "
-            "(group-writable + setgid) so the psiphon3xui service uid (in "
-            "group psiphon3xui) can create SQLite WAL/journal sidecars next "
-            "to panel.db. The 0750 mode (group r-x) made the first INSERT "
-            "INTO wizard fail with 'attempt to write a readonly database' "
-            "(Bug #1 — Hotfix #3; setgid form added in Hotfix #11)."
-        )
-        # And MUST NOT regress to 0750 on that exact line:
-        assert 'chmod 0750 "${INSTALL_PREFIX}"' not in text, (
-            "installer/prepare_user.sh must NOT chmod INSTALL_PREFIX back to "
-            "0750 — that was the Bug #1 root cause (no directory write → no "
-            "SQLite sidecars → 'attempt to write a readonly database')."
-        )
+        assert 'chmod 3775 "${INSTALL_PREFIX}"' in text
+        assert 'chmod 2775 "${CONFIG_DIR}"' in text
+        assert 'chmod 0750 "${INSTALL_PREFIX}"' not in text
 
     def test_prepare_user_chowns_install_prefix_to_service_group(self):
         """The group-writable chmod only matters because the directory is
@@ -6146,7 +6162,8 @@ class TestHotfix23PostReleaseRegressions:
             "systemd/psiphon-xray-applier.path",
             "systemd/psiphon-xray-applier.service",
             "systemctl enable --now psiphon-xray-applier.path",
-            "/usr/local/libexec/psiphon-3x-ui",
+            "/usr/local/libexec/psiphon-3x-ui/xray_apply.py",
+            "/usr/local/libexec/psiphon-3x-ui/xray_db_apply.py",
         ):
             assert needle not in install_sh, f"panel_install.sh still wires {needle}"
         # The queue dir must not be created any more (the bare
@@ -6755,34 +6772,16 @@ class TestHttpsCertInPlaceAccess:
             "(systemd refuses binds nested inside InaccessiblePaths)."
         )
 
-    def test_installer_chmods_root_cert_readable_when_present(self):
-        """The installer MUST chmod /root/cert (recursively, a+rX) when the
-        directory exists — cert provisioning tools write privkey.pem as
-        0600 root:root, and DAC still applies inside the bind mount. The
-        chmod is safe: /root itself stays 0700 root-only, so no host user
-        can traverse to /root/cert; only the panel unit's read-only bind
-        benefits from the readable bits."""
-        import re  # noqa: PLC0415
+    def test_installer_automates_group_read_without_world_read_chmod(self):
+        """Renewed root-only keys need a root-side repair, not a manual step.
 
+        The helper lives outside the service-writable prefix and is installed
+        root-owned. Its timer repeats the repair after every renewal; keys must
+        never become writable or world-readable to make the panel work.
+        """
         text = self._PANEL_INSTALL_SH.read_text(encoding="utf-8")
         no_comments = re.sub(r"#[^\n]*", "", text)
-        assert re.search(
-            r"chmod\s+-R\s+a\+rX\s+/root/cert\b",
-            no_comments,
-        ), (
-            "installer/panel_install.sh MUST run `chmod -R a+rX /root/cert` "
-            "(guarded by an existence check) so the panel unit's read-only "
-            "/root/cert bind can actually read the pair — provisioning "
-            "tools write privkey.pem 0600 root:root. The guard must be "
-            "`[[ -d /root/cert ]]` so the chmod is skipped on hosts that "
-            "keep their certs elsewhere."
-        )
-        assert re.search(
-            r"\[\[\s+-d\s+/root/cert\s+\]\]",
-            no_comments,
-        ), (
-            "The `chmod -R a+rX /root/cert` call MUST be guarded by "
-            "`[[ -d /root/cert ]]` — running it unconditionally would fail "
-            "the install on hosts without that directory (chmod exits "
-            "non-zero) and needlessly touch hosts that keep certs elsewhere."
-        )
+        assert 'install -m 0755 -o root -g root "${CERT_PERMS_HELPER_SRC}"' in no_comments
+        assert "systemctl enable --now psiphon-cert-perms.timer" in no_comments
+        assert "chmod -R a+rX /root/cert" not in no_comments
+        assert '--group "${PSIPHON3XUI_GROUP}" --directory /root/cert' in no_comments

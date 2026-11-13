@@ -202,6 +202,14 @@ local wheel_glob="${SCRIPT_DIR}/dist/psiphon_3x_ui_panel-*.whl"
     if [[ -f "${DB_PATH}" ]]; then
         chown "${PSIPHON3XUI_USER}:${PSIPHON3XUI_GROUP}" "${DB_PATH}" 2>/dev/null || true
         chmod 0660 "${DB_PATH}" 2>/dev/null || true
+        local sidecar
+        for sidecar in "${DB_PATH}-wal" "${DB_PATH}-shm" "${DB_PATH}-journal"; do
+            if [[ -f "${sidecar}" && ! -L "${sidecar}" ]]; then
+                chown "${PSIPHON3XUI_USER}:${PSIPHON3XUI_GROUP}" "${sidecar}" \
+                    || die "Could not restore SQLite sidecar ownership."
+                chmod 0660 "${sidecar}" || die "Could not restore SQLite sidecar permissions."
+            fi
+        done
     fi
 
     # ── 6. Generate session secret + write env file ───────────────────────
@@ -220,16 +228,22 @@ local wheel_glob="${SCRIPT_DIR}/dist/psiphon_3x_ui_panel-*.whl"
     fi
 
     info "Writing EnvironmentFile ${ENV_FILE} …"
-    # The self-signed HTTPS install prompt has been REMOVED (operator request).
-    # The TLS env-var plumbing below is kept intact so a future "enable HTTPS
-    # later" path can set PSIPHON3XUI_TLS_CERT / PSIPHON3XUI_TLS_KEY /
-    # PSIPHON3XUI_HTTPS_ONLY by hand-editing ${ENV_FILE} and restarting the
-    # panel service. The installer itself now ALWAYS writes HTTPS_ONLY=false
-    # and never emits the TLS_CERT/TLS_KEY pair.
+    # Fresh installs use HTTP, but upgrades preserve the operator's TLS
+    # selection and watcher interval. Read only these lines as data: never
+    # source the panel-writable env file into the root installer.
     local tls_env_block=""
     local https_only_line="PSIPHON3XUI_HTTPS_ONLY=false"
-    # PSIPHON3XUI_TLS_CERT=      # ← set manually to re-enable panel TLS
-    # PSIPHON3XUI_TLS_KEY=       # ← set manually to re-enable panel TLS
+    if [[ -r "${ENV_FILE}" ]]; then
+        tls_env_block="$(awk '/^[[:space:]]*PSIPHON3XUI_TLS_(CERT|KEY|RELOAD_INTERVAL)[[:space:]]*=/ {print}' "${ENV_FILE}")"
+        local saved_https_only
+        saved_https_only="$(awk '/^[[:space:]]*PSIPHON3XUI_HTTPS_ONLY[[:space:]]*=/ {line=$0} END {print line}' "${ENV_FILE}")"
+        if [[ -n "${saved_https_only}" ]]; then
+            https_only_line="${saved_https_only}"
+        fi
+        if [[ -n "${tls_env_block}" ]]; then
+            tls_env_block+=$'\n'
+        fi
+    fi
 
     # Phase 24 (post-Hotfix-#14 cleanup): the Psiphon-Inc public-bootstrap
     # credentials are BAKED INTO the panel wheel (panel/psiphon/__init__.py
@@ -491,6 +505,50 @@ EOF
         warn "Missing ${POLKIT_RULE_SRC} — the panel user will not be able to start tunnels (Bug #2 will persist)."
     fi
 
+    # Automatic renewal permissions: install immutable root-owned code outside
+    # the panel-writable prefix. Grant only group-read access to trusted PEMs,
+    # never world-read access or write access to the private keys.
+    local CERT_PERMS_UNIT_SRC="${SCRIPT_DIR}/systemd/psiphon-cert-perms.service"
+    local CERT_PERMS_UNIT_DST="/etc/systemd/system/psiphon-cert-perms.service"
+    local CERT_PERMS_TIMER_SRC="${SCRIPT_DIR}/systemd/psiphon-cert-perms.timer"
+    local CERT_PERMS_TIMER_DST="/etc/systemd/system/psiphon-cert-perms.timer"
+    local CERT_PERMS_HELPER_SRC="${SCRIPT_DIR}/installer/cert_permissions.py"
+    local CERT_PERMS_HELPER_DIR="/usr/local/libexec/psiphon-3x-ui"
+    local CERT_PERMS_HELPER_DST="${CERT_PERMS_HELPER_DIR}/cert_permissions.py"
+    if [[ ! -f "${CERT_PERMS_UNIT_SRC}" || ! -f "${CERT_PERMS_TIMER_SRC}" || ! -f "${CERT_PERMS_HELPER_SRC}" ]]; then
+        die "Missing certificate permission helper/templates — re-clone the repository."
+    fi
+    install -d -m 0755 -o root -g root "${CERT_PERMS_HELPER_DIR}" \
+        || die "Could not create the root-owned certificate helper directory."
+    install -m 0755 -o root -g root "${CERT_PERMS_HELPER_SRC}" "${CERT_PERMS_HELPER_DST}" \
+        || die "Could not install the certificate permission helper."
+    install -m 0644 -o root -g root "${CERT_PERMS_UNIT_SRC}" "${CERT_PERMS_UNIT_DST}" \
+        || die "Could not install psiphon-cert-perms.service."
+    install -m 0644 -o root -g root "${CERT_PERMS_TIMER_SRC}" "${CERT_PERMS_TIMER_DST}" \
+        || die "Could not install psiphon-cert-perms.timer."
+    sed -i \
+        -e "s|--group psiphon3xui|--group ${PSIPHON3XUI_GROUP}|" \
+        -e "s|/opt/psiphon-3x-ui/tls|${INSTALL_PREFIX}/tls|g" \
+        "${CERT_PERMS_UNIT_DST}"
+    # Ensure the optional bind source exists before the panel first starts;
+    # later issuer-created files then appear inside the same read-only bind.
+    if [[ ! -e /root/cert && ! -L /root/cert ]]; then
+        install -d -m 0750 -o root -g "${PSIPHON3XUI_GROUP}" /root/cert \
+            || die "Could not create the panel's certificate directory."
+    fi
+    if [[ ! -e "${INSTALL_PREFIX}/tls" && ! -L "${INSTALL_PREFIX}/tls" ]]; then
+        install -d -m 0750 -o root -g "${PSIPHON3XUI_GROUP}" "${INSTALL_PREFIX}/tls" \
+            || die "Could not create the protected TLS directory."
+    fi
+    /usr/bin/python3 -I "${CERT_PERMS_HELPER_DST}" \
+        --group "${PSIPHON3XUI_GROUP}" --directory /root/cert --directory "${INSTALL_PREFIX}/tls" \
+        || die "Certificate permission preflight failed."
+    systemctl daemon-reload 2>/dev/null \
+        || die "Could not register the certificate permission units."
+    systemctl enable --now psiphon-cert-perms.timer >/dev/null 2>&1 \
+        || die "Could not enable automatic certificate permission maintenance."
+    ok "Automatic certificate permission maintenance enabled."
+
     # (c) Phase 29 (item 3): the sudoers drop-in that used to be installed here
     #     is gone. It granted the service user NOPASSWD on `ufw allow
     #     <port>/tcp` so the in-panel port change could open the new port. The
@@ -499,44 +557,10 @@ EOF
     #     just privilege the operator did not ask to keep. install.sh removes
     #     any copy left behind by a Phase-28 install (_remove_stale_sudoers_dropin).
 
-    # ── 7c. Phase 26 — /opt/psiphon-3x-ui directory setup ──
-    # The panel's panel.db lives at /opt/psiphon-3x-ui/panel.db and must be
-    # writable by the psiphon3xui user (the panel service runs as that
-    # unprivileged user). Create the parent with mode 2775 (group-writable
-    # + setgid bit) so files created inside inherit the psiphon3xui group.
-    #
-    # Phase 25 Hotfix #12 context: the prior install wrote mode 0755 here,
-    # which blocked `_get_wizard_row() INSERT into panel.db` with
-    # `sqlite3.OperationalError: attempt to write a readonly database` —
-    # psiphon3xui could read but not write. The 2775 fix persists here.
-    #
-    # Phase 26 note: the Hotfix #9/#10/#11 Xray-patch applier sidecar (its
-    # bash driver, the two stdlib-only python patchers, the .path/.service
-    # unit pair, and the on-disk patch queue under /opt/psiphon-3x-ui) has
-    # been REMOVED. The panel now binds per-country Xray outbounds+routing
-    # through 3x-ui's own supported API (POST /panel/api/xray/ to read the
-    # template, POST /panel/api/xray/update to validate + persist +
-    # hot-reload) — no root privilege, no systemd units, no queue. See
-    # panel/dashboard/xray_routing.py.
-    install -d -m 2775 -o root -g "${PSIPHON3XUI_GROUP}" "/opt/psiphon-3x-ui" \
-        || warn "mkdir /opt/psiphon-3x-ui failed (continuing)."
-
-    # ── 7d. HTTPS card: make /root/cert readable by the panel (if present) ──
-    # The panel unit (systemd/psiphon-3x-ui.service) bind-mounts /root/cert
-    # read-only into the service's namespace (ProtectHome=tmpfs keeps the
-    # REST of /root masked). DAC still applies inside the bind, and cert
-    # provisioning tools (certbot / acme.sh) typically write privkey.pem as
-    # 0600 root:root, so make the tree readable. Safe: /root itself stays
-    # 0700 root:root, so no host user can traverse to /root/cert — the a+rX
-    # bits are only meaningful to this unit's read-only bind. Idempotent;
-    # non-fatal (the HTTPS card's preflight reports a precise 400 if the
-    # perms are wrong, with the same chmod as the fix). NOTE: a cert RENEWAL
-    # re-writes privkey.pem 0600 — re-run install.sh (or chmod by hand) then.
-    if [[ -d /root/cert ]]; then
-        chmod -R a+rX /root/cert \
-            || warn "Could not chmod /root/cert readable — the HTTPS card will reject the pair (preflight explains the fix)."
-        ok "/root/cert made readable for the panel service (read-only bind)."
-    fi
+    # ── 7c. Install prefix permissions ───────────────────────────────────
+    # Sticky protects root-owned TLS entries; group write + setgid allow SQLite sidecars.
+    install -d -m 3775 -o root -g "${PSIPHON3XUI_GROUP}" "${INSTALL_PREFIX}" \
+        || die "Could not protect the install prefix."
 
     # ── 8. Pre-flight: ensure PANEL_PORT is free for the new unit ──
     # Phase 24 Hotfix #2 (Bug: "Failed to restart psiphon-3x-ui.service:

@@ -1,0 +1,19 @@
+[Unit]
+Description=Psiphon-3X-UI certificate permission repair
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+# Root-owned code outside the panel's group-writable installation prefix.
+# Only root-owned PEMs in these trees become group-readable, never writable.
+ExecStart=/usr/bin/python3 -I /usr/local/libexec/psiphon-3x-ui/cert_permissions.py --group psiphon3xui --directory /root/cert --directory /opt/psiphon-3x-ui/tls
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=-/root/cert -/opt/psiphon-3x-ui/tls
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER CAP_DAC_READ_SEARCH
+RestrictAddressFamilies=AF_UNIX

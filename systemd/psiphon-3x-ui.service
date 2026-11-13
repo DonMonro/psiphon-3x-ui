@@ -1,8 +1,8 @@
 [Unit]
 Description=Psiphon-3X-UI management panel
 Documentation=https://github.com/DonMonro/psiphon-3x-ui
-After=network-online.target
-Wants=network-online.target
+After=network-online.target psiphon-cert-perms.service
+Wants=network-online.target psiphon-cert-perms.service
 
 [Service]
 Type=simple
@@ -61,12 +61,12 @@ ProtectHome=tmpfs
 # Read-only bind of the operator's cert directory (the HTTPS card pre-fills
 # /root/cert/ip/fullchain.pem + privkey.pem). The leading "-" makes systemd
 # ignore this line when the directory does not exist (fresh installs).
-# DAC perms still apply inside the bind: the pair must be readable by the
-# service user (chmod -R a+rX /root/cert) — and that is safe, because host
-# users still cannot traverse 0700 /root to reach the subtree; only this
-# unit sees it, read-only, through its own namespace.
+# DAC permissions still apply inside the bind. The root-owned permission
+# helper keeps PEM files readable by the panel group (0640), including after
+# renewals, without granting the panel write access to certificate material.
 BindReadOnlyPaths=-/root/cert
 PrivateTmp=true
+# The root-owned prefix is sticky: SQLite can create sidecars but cannot replace tls/.
 ReadWritePaths=/opt/psiphon-3x-ui
 # Allowing bind to the admin-chosen panel port across the high range:
 AmbientCapabilities=CAP_NET_BIND_SERVICE
