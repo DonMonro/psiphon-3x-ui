@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Repository layout anchors. Resolve relative to this file so the panel works
@@ -51,11 +51,8 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 8080
 
-    # Phase 7 — TLS termination at uvicorn. When both are populated (set by
-    # installer/https_install.sh + written into panel.env), __main__.py runs
-    # uvicorn with --ssl-certfile/--ssl-keyfile and the session/CSRF cookies
-    # are marked Secure via the PanelHttps flag below. Either field empty
-    # disables TLS at the panel layer (operator can still front with Caddy).
+    # Panel-terminated TLS. Both paths are required when TLS is configured;
+    # missing/unreadable files must never silently downgrade HTTPS to HTTP.
     tls_cert: Path | None = None
     tls_key: Path | None = None
 
@@ -63,6 +60,10 @@ class Settings(BaseSettings):
     # flags (Secure) flip from False→True. Defaults to False so the test
     # suite (which doesn't run over TLS) still issues login cookies.
     https_only: bool = False
+
+    # Apply externally renewed files automatically, without restarting the
+    # listener or existing connections. Zero disables background monitoring.
+    tls_reload_interval: int = Field(default=60, ge=0, le=86400)
 
     # Where the panel SQLite database lives.
     db_path: Path = Path("/opt/psiphon-3x-ui/panel.db")

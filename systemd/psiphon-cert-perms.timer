@@ -1,0 +1,12 @@
+[Unit]
+Description=Psiphon-3X-UI automatic certificate permission maintenance
+
+[Timer]
+# The panel also requests a repair before its first start after boot.
+OnBootSec=10s
+OnUnitActiveSec=60s
+AccuracySec=1s
+Unit=psiphon-cert-perms.service
+
+[Install]
+WantedBy=timers.target

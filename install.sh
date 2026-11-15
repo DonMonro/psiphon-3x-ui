@@ -294,6 +294,14 @@ run_uninstall() {
     done
     rm -f /etc/systemd/system/psiphon-tunnel@.service \
         "/etc/systemd/system/psiphon-tunnel@.service.d"/*.conf 2>/dev/null || true
+    # Stop both the periodic trigger and a possibly running permission repair
+    # before removing its root-owned code. Operator certificate files stay.
+    systemctl disable --now psiphon-cert-perms.timer 2>/dev/null || true
+    systemctl stop psiphon-cert-perms.service 2>/dev/null || true
+    rm -f /etc/systemd/system/psiphon-cert-perms.service \
+        /etc/systemd/system/psiphon-cert-perms.timer 2>/dev/null || true
+    rm -f /usr/local/libexec/psiphon-3x-ui/cert_permissions.py
+    rmdir /usr/local/libexec/psiphon-3x-ui 2>/dev/null || true
     rm -f /etc/polkit-1/rules.d/49-psiphon-3x-ui.rules 2>/dev/null || true
     # Phase 29 (item 3): clear the obsolete Phase-28 sudoers grant if an older
     # install left one behind. Leaving a NOPASSWD rule for a user that is about

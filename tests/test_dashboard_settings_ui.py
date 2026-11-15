@@ -109,6 +109,60 @@ def run_js():
     return run
 
 
+def test_tls_status_reports_active_expiry_not_just_the_disk_file(run_js):
+    run_js("""
+      respond = () => response(200, {
+        enabled: true, tls_active: true,
+        cert_path: '/root/cert/ip/fullchain.pem', key_path: '/root/cert/ip/privkey.pem',
+        active_cert_not_after: '2030-02-03T04:05:00+00:00', active_cert_expired: false,
+        cert_not_after: '2040-01-01T00:00:00+00:00', cert_expired: false,
+        auto_reload_enabled: true, reload_interval_seconds: 60,
+      });
+      await app.loadHttpsStatus();
+      assert.equal(app.tls.active, true);
+      assert.match(app.tls.status, /active certificate valid until 2030-02-03/);
+      assert.match(app.tls.status, /automatic renewal checks every 60 seconds/);
+      assert(!app.tls.status.includes('2040'));
+    """)
+
+
+def test_invalid_tls_renewal_is_reported_as_retained_not_applied(run_js):
+    run_js(r"""
+      respond = () => response(200, {
+        enabled: true, tls_active: true, renewal_pending: true,
+        active_cert_not_after: '2030-01-01T00:00:00+00:00', active_cert_expired: false,
+        reload_error: 'certificate/key mismatch', auto_reload_enabled: true,
+        reload_interval_seconds: 60,
+      });
+      await app.loadHttpsStatus();
+      assert.match(app.tls.status, /renewal not applied: certificate\/key mismatch/);
+      assert.match(app.tls.status, /previous certificate retained/);
+      assert(!app.tls.status.includes('applying automatically'));
+    """)
+
+
+def test_tls_periodic_status_refresh_preserves_unsaved_paths(run_js):
+    run_js("""
+      const intervals = [];
+      const cleared = [];
+      context.setInterval = (callback, delay) => { intervals.push({callback, delay}); return 7; };
+      context.clearInterval = id => cleared.push(id);
+      app.refreshAll = async () => {};
+      await app.init();
+      await new Promise(resolve => setImmediate(resolve));
+      app.section = 'settings';
+      app.tls.cert = '/my/unsaved-cert.pem';
+      app.tls.key = '/my/unsaved-key.pem';
+      respond = () => response(200, {enabled: false, cert_path: '/server/cert', key_path: '/server/key'});
+      assert.equal(intervals[0].delay, 60000);
+      await intervals[0].callback();
+      assert.equal(app.tls.cert, '/my/unsaved-cert.pem');
+      assert.equal(app.tls.key, '/my/unsaved-key.pem');
+      app.destroy();
+      assert.deepEqual(cleared, [7]);
+    """)
+
+
 def test_current_username_is_an_editable_manual_input(markup):
     field = markup.inputs["username.current"]
     assert "disabled" not in field

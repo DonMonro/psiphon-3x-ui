@@ -1,45 +1,43 @@
-"""Entrypoint for `python -m panel`.
-
-Lets the systemd unit run the panel without invoking uvicorn's CLI directly.
-Phase 0 stub: real host/port resolution from the DB lands in another phase.
-"""
+"""Entrypoint for ``python -m panel``; managed TLS renewal and debug reload."""
 
 from __future__ import annotations
 
-import logging
-from pathlib import Path
-
-import uvicorn
+from uvicorn.supervisors import ChangeReload
 
 from .config import get_settings
+from .tls_reload import TLSConfig, TLSServer
 
 
 def main() -> None:
     settings = get_settings()
-    # Phase 7 — TLS termination. If the installer has populated
-    # settings.tls_cert + settings.tls_key (via panel.env) we bind with
-    # --ssl-certfile/--ssl-keyfile. Either blank → plain HTTP (operator can
-    # instead front the panel with Caddy/nginx).
-    ssl_kwargs: dict = {}
-    if settings.tls_cert and settings.tls_key:
-        cert = Path(settings.tls_cert)
-        key = Path(settings.tls_key)
-        if cert.is_file() and key.is_file():
-            ssl_kwargs["ssl_certfile"] = str(cert)
-            ssl_kwargs["ssl_keyfile"] = str(key)
-        else:  # pragma: no cover — defensive; installer always writes both
-            logging.getLogger("panel").warning(
-                "TLS settings present but cert/key missing (%s, %s) — falling back to HTTP.",
-                cert,
-                key,
-            )
-    uvicorn.run(
+    ssl_kwargs = {}
+    if settings.tls_cert or settings.tls_key:
+        if not settings.tls_cert or not settings.tls_key:
+            raise ValueError("both TLS certificate and private-key paths are required")
+        ssl_kwargs = {
+            "ssl_certfile": str(settings.tls_cert),
+            "ssl_keyfile": str(settings.tls_key),
+        }
+
+    config = TLSConfig(
         "panel.main:app",
         host=settings.host,
         port=settings.port,
         reload=settings.debug,
+        startup_retry_interval=max(1, getattr(settings, "tls_reload_interval", 60)),
         **ssl_kwargs,
     )
+    server = TLSServer(config)
+    if config.should_reload:
+        # Match uvicorn.run's dispatch, leaving TLS initialization to each
+        # worker's Config.load() rather than constructing SSLContexts here.
+        sock = config.bind_socket()
+        try:
+            ChangeReload(config, target=server.run, sockets=[sock]).run()
+        finally:
+            sock.close()
+    else:
+        server.run()
 
 
 if __name__ == "__main__":

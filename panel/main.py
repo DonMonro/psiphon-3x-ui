@@ -10,6 +10,8 @@ cold-start on a fresh server before the wizard has run.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -21,6 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from . import runtime, tls_reload
 from .auth import (
     CSRF_COOKIE_NAME,
     CSRF_HEADER_NAME,
@@ -35,7 +38,7 @@ from .auth import (
     verify_csrf_token,
     verify_password,
 )
-from .config import load_countries
+from .config import get_settings, load_countries
 from .dashboard.router import router as dashboard_router
 from .db import get_db, init_db
 from .models import Settings
@@ -48,13 +51,33 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 async def lifespan(app: FastAPI):
     # Create DB tables on boot. Safe to call repeatedly.
     init_db()
-    yield
+
+    # TLSConfig.load initializes the exact serving pair before lifespan.
+    # Never infer TLS state by adopting whatever happens to be on disk here.
+    settings = get_settings()
+    reload_task: asyncio.Task | None = None
+    if settings.tls_cert or settings.tls_key:
+        if runtime.get_tls_controller() is None:
+            raise RuntimeError("Configured TLS requires the managed 'python -m panel' entrypoint")
+        if settings.tls_reload_interval > 0:
+            reload_task = asyncio.create_task(
+                tls_reload.watchdog(settings.tls_reload_interval),
+                name="tls-reload-watchdog",
+            )
+
+    try:
+        yield
+    finally:
+        if reload_task is not None:
+            reload_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await reload_task
 
 
 app = FastAPI(
     title="Psiphon-3X-UI",
     description="Psiphon companion panel for Sanaei 3x-ui.",
-    version="1.0.4",
+    version="1.0.5",
     lifespan=lifespan,
 )
 

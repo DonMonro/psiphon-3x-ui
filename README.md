@@ -200,17 +200,32 @@ reverse-proxying to the panel port, which handles Let's Encrypt for you.
 
 To terminate TLS in the panel itself, use the dashboard's **Settings →
 HTTPS (TLS)** card: enter the fullchain + private-key paths and click
-Enable — the panel rewrites its env file and restarts with TLS (also
-flipping the `Secure` flag on the session and CSRF cookies). The default
-paths point at `/root/cert/ip/`: the panel unit bind-mounts `/root/cert`
-read-only into its namespace, and the installer makes that tree readable
-(`chmod -R a+rX /root/cert`) — re-run the installer (or the chmod by hand)
-after each cert renewal, since renewals rewrite the private key as
-root-only. Certs stored anywhere else under `/root` are not visible to the
-service; move them under `/root/cert` or to `/opt/psiphon-3x-ui/tls/`.
-(Equivalently, set `PSIPHON3XUI_TLS_CERT`, `PSIPHON3XUI_TLS_KEY`, and
-`PSIPHON3XUI_HTTPS_ONLY=true` in `/opt/psiphon-3x-ui/panel.env` by hand and
-restart.)
+Enable once. The panel persists the paths and restarts with TLS (also
+marking session and CSRF cookies `Secure`). Upgrades preserve this TLS
+selection.
+
+**Renewal pickup is automatic.** Your existing issuer renews the source files;
+the panel checks their contents every 60 seconds and safely applies a valid,
+matching renewed pair to new TLS connections. Neither a restart nor re-saving
+the same paths is needed. Existing connections remain open. Invalid, expired,
+unreadable or incomplete replacements retain the last-good serving pair and
+are retried; the Settings card shows the active expiry and renewal errors.
+This does not obtain certificates or renew an issuer's subscription/license.
+
+The default paths are `/root/cert/ip/fullchain.pem` and `privkey.pem`.
+The installer-managed `psiphon-cert-perms.timer` automatically restores
+**group-read-only** access after an issuer recreates root-only files, also
+covering `/opt/psiphon-3x-ui/tls/`. Private keys are not made world-readable.
+The panel sees `/root/cert` through a read-only bind; the rest of `/root`
+remains masked. Symlink targets outside these managed trees are deliberately
+not chmod'ed. For other locations, ensure the issuer keeps the files readable
+by `psiphon3xui`, or deploy the renewed PEMs into a managed tree.
+
+Use the installed `python -m panel` entrypoint for managed renewal. Configured
+HTTPS never silently falls back to HTTP: at boot it waits for a loadable pair
+if files are missing or temporarily unreadable. Automatic monitoring can be
+configured with `PSIPHON3XUI_TLS_RELOAD_INTERVAL` (seconds; `0` disables it).
+Allow approximately two minutes for pickup when permission repair is needed.
 
 ---
 
@@ -230,6 +245,7 @@ The installer writes `/opt/psiphon-3x-ui/panel.env`, read by systemd via
 | `PSIPHON3XUI_PSIPHON_CONFIG_DIR` | `/opt/psiphon-3x-ui/config` | per-country generated configs |
 | `PSIPHON3XUI_COUNTRIES_FILE` | packaged `panel/data/countries.yaml` | egress-region list |
 | `PSIPHON3XUI_TLS_CERT` / `_TLS_KEY` | unset | panel-terminated TLS |
+| `PSIPHON3XUI_TLS_RELOAD_INTERVAL` | `60` | automatic certificate checks, seconds (`0` disables) |
 | `PSIPHON3XUI_HTTPS_ONLY` | `false` | mark cookies `Secure` |
 | `PSIPHON3XUI_CSRF_ENFORCE` | `true` | CSRF middleware toggle |
 | `PSIPHON3XUI_LOGIN_RATE_LIMIT` / `_LOGIN_RATE_WINDOW` | `10` / `60` | login attempts per window (seconds) |

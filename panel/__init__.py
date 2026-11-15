@@ -7,4 +7,4 @@ This is a Phase-0 skeleton; routers and runtime logic land in later phases.
 See ``plans/ROADMAP.md`` for the full plan.
 """
 
-__version__ = "1.0.4"
+__version__ = "1.0.5"

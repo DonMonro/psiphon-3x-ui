@@ -50,32 +50,16 @@ run_prepare_user() {
         fi
     done
 
-    # Make sure the prefix tree is owned by our service user/group so the panel
-    # can write to it without root. Idempotent: chown -R is safe to re-run.
-    #
-    # Phase 25 Hotfix #11: changed from bare chmod 0770 (no setgid) to the
-    # explicit-mode form 2775 (setgid + group-writable). Without setgid,
-    # files created inside inherit the invoking process's primary group
-    # — on the operator's v3 box, the prior mkdir+chmod had left the parent
-    # as mode 0755 root:root (no setgid). Sqlite then created panel.db AS
-    # root:root (0644) and the panel service (running as psiphon3xui)
-    # couldn't write WAL/journal sidecars next to it. 2775 keeps group
-    # write on the parent dir AND forces every new sub-/file created inside
-    # to inherit the psiphon3xui group.
-    # Phase 26 HARDENING (post-Hotfix #13): the ExecStartPre of
-    # psiphon-tunnel@.service calls `mkdir -p /opt/psiphon-3x-ui/data/<COUNTRY>`
-    # — which creates `data` first under parent `/opt/psiphon-3x-ui` and
-    # then the per-country subdir. For that mkdir to succeed without the
-    # ExecStartPre calling chown (which would EPERM under
-    # `NoNewPrivileges=true` + CAP_CHOWN stripped by the sandbox), the
-    # parent dir must already be `group=psiphon3xui` writable + the set-GID
-    # bit applied so `mkdir`'s leading component inherits the same group.
-    # We deliberately use chmod 2775 (setgid) instead of install -d (which
-    # would replace the inode and break any pre-existing hardlinks in a
-    # re-install). chmod does NOT clear the setgid bit on an existing dir.
+    # Sticky permissions require any live SQLite journals to finish before ownership changes.
+    if systemctl cat psiphon-3x-ui.service >/dev/null 2>&1; then
+        systemctl stop psiphon-3x-ui.service \
+            || die "Could not stop the panel before updating directory permissions."
+    fi
+    # Setgid keeps service-created SQLite sidecars and tunnel data in the panel group.
     mkdir -p "${CONFIG_DIR}" "${BIN_DIR}" "${VENV_DIR}"
     chown -R root:"${PSIPHON3XUI_GROUP}" "${INSTALL_PREFIX}" 2>/dev/null || true
-    chmod 2775 "${INSTALL_PREFIX}" 2>/dev/null || true
+    # Sticky protects root-owned TLS directory entries without blocking SQLite sidecars.
+    chmod 3775 "${INSTALL_PREFIX}" || die "Could not protect the install prefix."
     chmod 2775 "${CONFIG_DIR}" 2>/dev/null || true
     chmod 0750 "${BIN_DIR}" 2>/dev/null || true
 

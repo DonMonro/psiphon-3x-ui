@@ -281,6 +281,18 @@
       padding: 1.1rem 1.3rem;
       box-shadow: 0 8px 24px rgba(0,0,0,.35);
     }
+    /* The logs editor is the one panel that legitimately wants more room:
+       Psiphon log lines are long JSON, so give its article extra width (and
+       let the console inside it size to the article, not to the nowrap table
+       cell, which the pre's unwrapped text would otherwise stretch). */
+    .row-editor article.logs-article {
+      max-width: 54rem;
+      /* Anchor the table-cell shrink-wrap: the cell is nowrap, so without an
+         explicit width the article would hug the log text and the text would
+         push the whole row wider than the frame. */
+      width: 54rem;
+    }
+    .row-editor article.logs-article pre.log { max-width: 100%; }
     .row-editor article > header strong { color: var(--no-text); font-size: 1rem; font-weight: 700; }
     .row-editor article > footer { display: flex; gap: .6rem; justify-content: flex-end; margin-top: .75rem; }
     .row-editor fieldset { margin-bottom: .4rem; }
@@ -301,9 +313,16 @@
     .card > article > header strong { color: var(--no-text); }
 
     /* ── Log consoles ────────────────────────────────────────── */
-    pre.log { max-height: 22rem; overflow: auto; background: var(--no-console); color: #D7DEE8;
+    pre.log { max-height: 24rem; overflow: auto; background: var(--no-console); color: #D7DEE8;
               padding: .85rem 1rem; border: 1px solid var(--no-hairline);
-              border-radius: var(--no-radius-ctl); font-size: .8rem; }
+              border-radius: var(--no-radius-ctl); font-size: .8rem;
+              /* Long Psiphon JSON lines must wrap inside the console instead
+                 of widening the (nowrap) table cell and spilling past the
+                 article's right border. `overflow-wrap: anywhere` also shrinks
+                 the pre's intrinsic min-content width, which is what auto
+                 table layout uses to size the cell — without it the console
+                 text still stretches the row. */
+              white-space: pre-wrap; overflow-wrap: anywhere; }
     .card > pre { background: var(--no-console); border: 1px solid var(--no-hairline);
                   border-radius: var(--no-radius-ctl); color: #D7DEE8;
                   font-size: .78rem; padding: .75rem .9rem; }
@@ -559,7 +578,7 @@
                 </article>
 
                 <!-- Logs -->
-                <article x-show="logs.open && logs.code === c.code" x-cloak>
+                <article class="logs-article" x-show="logs.open && logs.code === c.code" x-cloak>
                   <header><strong x-text="`Logs — ${logs.code}`"></strong></header>
                   <fieldset>
                     <label>Lines to tail
@@ -679,14 +698,15 @@
       </article>
       <article>
         <header><strong>HTTPS (TLS)</strong>
-          <span x-show="tls.enabled" class="healthy-badge">https active</span>
-          <span x-show="!tls.enabled" class="inactive-badge">http only</span>
+          <span x-show="tls.active" class="healthy-badge">https active</span>
+          <span x-show="!tls.active" class="inactive-badge">no active panel TLS</span>
         </header>
-        <p>Point the panel at a TLS certificate/key pair to serve the dashboard over HTTPS.
-           The default <code>/root/cert/...</code> paths work if the installer ran its
-           <code>chmod -R a+rX /root/cert</code> (re-run it after each cert renewal — renewals
-           rewrite the private key as root-only). Saving restarts the panel service — reopen it
-           via <code>https://<host>:<port></code> when it comes back.</p>
+        <p>Enter the certificate (full chain) and private-key paths once.
+           When your existing issuer renews these files, the panel applies a valid,
+           matching pair automatically without restarting or disconnecting users.
+           The default <code>/root/cert/...</code> files remain group-readable after
+           renewal through the installed permission timer. Invalid or incomplete
+           replacements leave the previous certificate active.</p>
         <fieldset :disabled="busy.tls">
           <label>Public Key Path
             <input type="text" x-model="tls.cert" placeholder="/root/cert/ip/fullchain.pem">
@@ -757,12 +777,20 @@
         // pre-filled by loadHttpsStatus() with the server's current values
         // (falling back to the /root/cert defaults) so an enable is a
         // two-click operation when the certs are where the card expects them.
-        tls:    { cert: "", key: "", enabled: false, status: "" },
+        tls:    { cert: "", key: "", enabled: false, active: false, status: "" },
+        tlsTimer: null,
         toast:  { text: "", kind: "ok" },
 
         async init() {
           await this.refreshAll();
           this.loadHttpsStatus();
+          this.tlsTimer = setInterval(() => {
+            if (this.section === "settings" && !this.busy.tls) return this.loadHttpsStatus(true);
+          }, 60000);
+        },
+
+        destroy() {
+          if (this.tlsTimer !== null) clearInterval(this.tlsTimer);
         },
 
         // Read the live cookie, not a token cached by this tab. Force a
@@ -1361,20 +1389,38 @@
         },
 
         // ---- HTTPS (TLS) card ------------------------------------------
-        // GET pre-fills the two path inputs with the server's current (or
-        // default) values and renders a one-line status: whether TLS is on
-        // and whether the configured files are currently on disk.
-        async loadHttpsStatus() {
+        // GET reports on-disk files separately from the actually serving pair.
+        async loadHttpsStatus(preserveInputs = false) {
           try {
             const r = await fetch("/api/dashboard/https-settings");
             if (!r.ok) return;
             const b = await this._readBody(r);
-            this.tls.cert = b.cert_path || "";
-            this.tls.key = b.key_path || "";
+            if (!preserveInputs) {
+              this.tls.cert = b.cert_path || "";
+              this.tls.key = b.key_path || "";
+            }
             this.tls.enabled = !!b.enabled;
-            this.tls.status = b.enabled
-              ? `HTTPS is enabled — cert ${b.cert_exists ? "found" : "MISSING"} on disk.`
-              : "HTTPS is disabled (panel serves plain HTTP).";
+            this.tls.active = !!b.tls_active;
+            if (!b.enabled) {
+              this.tls.status = "HTTPS is disabled (panel serves plain HTTP).";
+              return;
+            }
+            const bits = [];
+            const expiry = b.active_cert_not_after || b.cert_not_after;
+            const expired = b.tls_active ? b.active_cert_expired : b.cert_expired;
+            if (expiry) {
+              const when = expiry.replace("T", " ").slice(0, 16) + " UTC";
+              bits.push(expired ? `active certificate EXPIRED (${when})` : `active certificate valid until ${when}`);
+            }
+            if (b.reload_error) {
+              bits.push(`renewal not applied: ${b.reload_error}; previous certificate retained`);
+            } else if (b.renewal_pending) {
+              bits.push("changed certificate files detected — validation pending");
+            }
+            bits.push(b.auto_reload_enabled
+              ? `automatic renewal checks every ${b.reload_interval_seconds} seconds`
+              : "automatic renewal monitoring is inactive");
+            this.tls.status = (b.tls_active ? "HTTPS is active — " : "HTTPS is configured — ") + bits.join("; ") + ".";
           } catch (e) { /* card stays blank — non-fatal */ }
         },
 
@@ -1462,7 +1508,7 @@
   <a class="version-badge" href="https://github.com/DonMonro/psiphon-3x-ui" target="_blank" rel="noopener">
     <!-- GitHub mark (official octocat path, simplified) -->
     <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
-    <span>v1.0.4</span>
+    <span>v1.0.5</span>
   </a>
 </body>
 </html>
