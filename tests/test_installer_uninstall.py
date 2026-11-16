@@ -113,6 +113,8 @@ VENV_DIR={missing}
 DB_PATH={missing}
 ENV_FILE={missing}
 unset PANEL_PORT PSIPHON3XUI_PORT
+require_root() {{ :; }}
+acquire_install_lock() {{ :; }}
 systemctl() {{ :; }}
 rm() {{ printf '%s\\n' mocked-file-removal; }}
 id() {{ return 1; }}

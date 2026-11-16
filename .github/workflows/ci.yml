@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, test]
   pull_request:
     branches: [main]
 
@@ -11,6 +11,11 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up Node for browser and polkit contract tests
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -31,15 +36,18 @@ jobs:
           pip install -e .
 
       - name: Ruff lint
-        run: ruff check panel tests
+        run: ruff check panel tests installer/update_panel.py installer/write_build_metadata.py
 
       - name: Ruff format check
-        run: ruff format --check panel tests
+        run: ruff format --check panel tests installer/update_panel.py installer/write_build_metadata.py
 
       - name: Pytest
         env:
           PSIPHON3XUI_SESSION_SECRET: ci-secret
         run: pytest tests -ra
+
+      - name: JavaScript update and CSRF tests
+        run: node --test tests/js/*.test.cjs
 
   shellcheck:
     runs-on: ubuntu-22.04

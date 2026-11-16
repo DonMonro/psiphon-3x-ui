@@ -14,8 +14,8 @@
 //   start_unit(US) failed: systemctl start psiphon-tunnel@US.service -> exit 1".
 //
 // Scope:
-//   The rule covers TWO distinct unit-name classes — both restricted to the
-//   minimal set of verbs required by the panel's own automation:
+//   Each unit-name class is restricted to the minimal verbs required by
+//   the panel's own automation:
 //
 //   (1) The per-country tunnel fleet — any unit whose name matches the
 //       `psiphon-tunnel@*.service` template (start/stop/restart, called
@@ -44,8 +44,11 @@
 // hot-reload). 3x-ui reconciles the running core itself, so no root-side
 // unit, no config.json edit, and no polkit escalation are needed for it.
 //
-// The panel can NEVER start/stop arbitrary units. Only its own tunnel fleet
-// plus its own unit restart plus the 3x-ui panel restart are authorised.
+//   (4) The fixed update download/install services — start only. Recovery is
+//       boot-managed and never authorized to the panel account.
+//
+// The panel can NEVER start/stop arbitrary units. Only its own tunnel fleet,
+// its own unit restart, the 3x-ui restart, and those update job starts are authorized.
 //
 // The rule is JavaScript (polkit's native rules language) and runs inside
 // polkitd's JS interpreter. The numerical prefix `49-` keeps it ahead of
@@ -83,7 +86,14 @@ polkit.addRule(function(action, subject) {
     var isFleet = unitStr.startsWith("psiphon-tunnel@");
     var isPanelSelf = unitStr === "psiphon-3x-ui.service";
     var isXuiSelf = unitStr === "x-ui.service";
-    if (!isFleet && !isPanelSelf && !isXuiSelf) {
+    // The two root-owned updater jobs accept only a bounded request file.
+    // Never grant transient units, recovery, arbitrary commands, or stop/restart.
+    var isUpdater = unitStr === "psiphon-3x-ui-update-download.service" ||
+                    unitStr === "psiphon-3x-ui-update-install.service";
+    if (isUpdater && verb !== "start") {
+        return polkit.Result.NOT_HANDLED;
+    }
+    if (!isFleet && !isPanelSelf && !isXuiSelf && !isUpdater) {
         return polkit.Result.NOT_HANDLED;
     }
     if ((isPanelSelf || isXuiSelf) && verb !== "restart") {

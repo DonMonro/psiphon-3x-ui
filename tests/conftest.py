@@ -13,6 +13,26 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 
 
+@pytest.fixture(autouse=True)
+def disable_automatic_update_checks(monkeypatch):
+    """Existing app tests must never start periodic network work.
+
+    Checker tests explicitly enable their interval after this fixture. Use a
+    private monkeypatch context so its teardown cannot undo another fixture's
+    environment while that fixture is still shutting down.
+    """
+    from panel import config, updates
+
+    clear_manager_cache = updates.get_manager.cache_clear
+    with monkeypatch.context() as environment:
+        environment.setenv("PSIPHON3XUI_UPDATE_CHECK_INTERVAL", "0")
+        config.get_settings.cache_clear()
+        clear_manager_cache()
+        yield
+    clear_manager_cache()
+    config.get_settings.cache_clear()
+
+
 @pytest.fixture
 def tls_pair_factory(tmp_path):
     """Create valid, expired, or future-dated pairs without openssl subprocesses.

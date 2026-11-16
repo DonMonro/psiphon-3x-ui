@@ -145,6 +145,8 @@ if [[ ! -d "${SCRIPT_DIR}/panel" ]]; then
     die "panel/ source directory not found at ${SCRIPT_DIR}/panel. Did the curl|bash flow clone the repo?"
 fi
 info "Building wheel from repo root ${SCRIPT_DIR} …"
+/usr/bin/python3 -I "${SCRIPT_DIR}/installer/write_build_metadata.py" "${SCRIPT_DIR}" \
+    || die "Could not record the panel source revision."
 
 # Clean any stale build artefacts under the repo root.
 rm -rf "${SCRIPT_DIR}/dist" "${SCRIPT_DIR}/build" 2>/dev/null || true
@@ -336,6 +338,14 @@ EOF
     chmod 0660 "${ENV_FILE}"
     chown "root:${PSIPHON3XUI_GROUP}" "${ENV_FILE}" 2>/dev/null || true
     ok "EnvironmentFile written: ${ENV_FILE}"
+
+    # Register the root-owned staged updater before starting this panel build.
+    # The helper records the installed version/revision but never re-seeds users.
+    run_update_install
+
+    # A manual reinstall deliberately returns to the freshly-built base venv.
+    # Remove only the updater-owned ExecStart override; keep operator drop-ins.
+    rm -f /etc/systemd/system/psiphon-3x-ui.service.d/50-panel-update.conf
 
     # ── 7. Render + register the systemd unit ────────────────────────────
     if [[ ! -s "${SYSTEMD_UNIT_SRC}" ]]; then

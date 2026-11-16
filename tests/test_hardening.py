@@ -783,13 +783,13 @@ class TestPackagingRegressions:
         """``pyproject.toml``'s ``[project]`` ``version`` controls the wheel
         filename. After bumping ``app.version`` we MUST bump it here too or
         the installer advertises the old project version even though the
-        FastAPI app reports the new one. Lock in 1.0.5 — bump this when
+        FastAPI app reports the new one. Lock in 1.0.6 — bump this when
         cutting a new release.
         """
         pyproject = _load_pyproject()
-        assert pyproject["project"]["version"] == "1.0.5", (
+        assert pyproject["project"]["version"] == "1.0.6", (
             "pyproject.toml [project].version must be bumped to match panel.main's "
-            f"app.version. Got {pyproject['project']['version']!r}, expected '1.0.5'."
+            f"app.version. Got {pyproject['project']['version']!r}, expected '1.0.6'."
         )
 
     def test_runtime_versions_match_package_version(self):

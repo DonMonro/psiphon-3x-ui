@@ -68,6 +68,14 @@ class Settings(BaseSettings):
     # Where the panel SQLite database lives.
     db_path: Path = Path("/opt/psiphon-3x-ui/panel.db")
 
+    # Check the main update channel every six hours. Zero disables automatic
+    # checks; authenticated, explicitly requested updates remain available.
+    update_check_interval: int = Field(default=21600, ge=0, le=604800)
+    # Requests/cache are panel-owned; helper results/staging are root-owned.
+    # None follows db_path so custom installation prefixes work unchanged.
+    updates_dir: Path | None = None
+    update_state_dir: Path = Path("/var/lib/psiphon-3x-ui-updater")
+
     # Where per-country generated Psiphon configs are written by the wizard.
     psiphon_config_dir: Path = Path("/opt/psiphon-3x-ui/config")
 

@@ -104,6 +104,9 @@ panel.db-shm
 /artifacts/
 /tmp/
 
+# Generated at wheel-build time; never a source-controlled revision.
+/panel/data/build.json
+
 
 # ── 8.  Dev-host command-output scratch files & test logs ────────────────
 # (Added in Phase 7 when validating ruff/pytest/shellcheck gates and

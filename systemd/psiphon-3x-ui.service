@@ -1,8 +1,9 @@
 [Unit]
 Description=Psiphon-3X-UI management panel
 Documentation=https://github.com/DonMonro/psiphon-3x-ui
-After=network-online.target psiphon-cert-perms.service
-Wants=network-online.target psiphon-cert-perms.service
+After=network-online.target psiphon-cert-perms.service psiphon-3x-ui-update-recover.service
+Wants=network-online.target psiphon-cert-perms.service psiphon-3x-ui-update-recover.service
+Requires=psiphon-3x-ui-update-recover.service
 
 [Service]
 Type=simple
