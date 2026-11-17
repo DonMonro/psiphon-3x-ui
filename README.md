@@ -88,11 +88,40 @@ inbound ports yourself.
 
 ### Upgrading
 
-`install.sh` is idempotent: re-running upgrades the panel in place and preserves
-`panel.db` and the session secret, so existing sessions and countries survive.
-The installer tracks the `main` branch — push a commit, re-run the installer, and
-the change is live. No tag or release step. Override the ref with
-`PSIPHON3XUI_REPO_REF=<branch>` for testing.
+Use **Update** beside Logout in the dashboard or setup wizard. It checks for a
+new build, downloads it when available, and opens an **Install update** dialog.
+Choose **Later** to keep the download for another time. Installation starts only
+after you confirm that specific downloaded build.
+
+The server also checks every **6 hours**, including an overdue check after
+startup. An available update appears as a persistent notification when you open
+the panel, with a **Download** action. Automatic checks never download or install
+an update. Keep the panel service running for these checks; no browser tab needs
+to stay open. Set `PSIPHON3XUI_UPDATE_CHECK_INTERVAL=0` in `panel.env` to disable
+automatic checks (the default is `21600` seconds).
+
+Updates follow this repository's **main** branch, matching the installer. Each
+update is pinned to the exact commit found by the check. Recorded build revisions
+allow same-version fixes to be detected; installations without build metadata
+compare version numbers until a new install records a revision. Lower versions
+are not offered. No tag or release is required.
+
+The updater builds a new panel environment before restarting the panel, verifies
+its version and revision after startup, and restores the previous environment if
+activation fails. The page reports progress and reconnects to check the result.
+Your complete `panel.env`, database, login credentials, TLS settings, country
+configs, and 3x-ui entries are preserved. The companion panel and its managed
+service/helper files are updated; upstream **Psiphon tunnel-core and 3x-ui are not
+upgraded** by this button. Download/build access to GitHub and PyPI is required.
+
+Existing deployments need to run the current installer once to register the
+root-owned update helper and services. A wheel-only replacement cannot add those
+system services; the UI explains when they are missing. The normal installer
+still tracks `main`; override `PSIPHON3XUI_REPO_REF=<branch>` for development.
+A command-line reinstall preserves the database and session secret but still
+prompts for and reseeds the admin credentials. In-panel updates skip that step.
+See [update troubleshooting](docs/TROUBLESHOOTING.md#in-panel-updates) for logs
+and recovery.
 
 ### Uninstall
 
@@ -154,6 +183,10 @@ the code at `/docs` and are authoritative.
 | POST | `/auth/login` · `/auth/logout` | set / clear session + CSRF cookies (204) |
 | GET | `/auth/csrf` | mint or refresh the CSRF cookie |
 | GET | `/api/me` | current user + `wizard_completed` |
+| GET | `/api/updates` | cached update status, available build, and installation result |
+| POST | `/api/updates/check` | check now and download a new build when available |
+| POST | `/api/updates/download` | download the offered revision |
+| POST | `/api/updates/install` | install the ready job with explicit confirmation |
 | GET | `/api/wizard` | current step + step data |
 | POST | `/api/wizard/countries` · `/ports` · `/xui-detect` · `/xui-creds` · `/clone-template` | wizard steps 1, 2, 4, 5, 6 |
 | POST | `/api/wizard/apply` · `/clone` | wizard steps 3 and 7 (SSE) |

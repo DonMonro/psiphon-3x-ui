@@ -117,6 +117,45 @@ require_root() {
     fi
 }
 
+acquire_install_lock() {
+    # Shared with the two in-panel updater jobs. /run itself is trusted;
+    # refuse a substituted parent/file before opening the lock as root.
+    local lock_dir="/run/psiphon-3x-ui-updater"
+    local lock_path="${lock_dir}/operation.lock"
+    command -v flock >/dev/null 2>&1 \
+        || die "flock is required (install util-linux)."
+    if [[ -L "${lock_dir}" || ( -e "${lock_dir}" && ! -d "${lock_dir}" ) ]]; then
+        die "Updater lock directory is not a real directory."
+    fi
+    if [[ -d "${lock_dir}" ]]; then
+        local owner_mode
+        owner_mode="$(stat -c '%u:%a' "${lock_dir}")"
+        [[ "${owner_mode}" == "0:755" || "${owner_mode}" == "0:700" ]] \
+            || die "Updater lock directory must be root-owned and not writable by others."
+    else
+        install -d -m 0755 -o root -g root "${lock_dir}" \
+            || die "Could not create updater lock directory."
+    fi
+    if [[ -L "${lock_path}" || ( -e "${lock_path}" && ! -f "${lock_path}" ) ]]; then
+        die "Updater lock file is not a regular file."
+    fi
+    if [[ -f "${lock_path}" ]]; then
+        local lock_metadata
+        lock_metadata="$(stat -c '%u:%a:%h' "${lock_path}")"
+        [[ "${lock_metadata}" == "0:600:1" || "${lock_metadata}" == "0:644:1" ]] \
+            || die "Updater lock file must be root-owned, single-linked, and not writable by others."
+    fi
+    exec 9>>"${lock_path}" || die "Could not open updater lock."
+    chmod 0600 "${lock_path}" || die "Could not protect updater lock."
+    flock -n 9 || die "Another installation or panel update is running. Wait for it to finish."
+    # Never overwrite a database or environment covered by an interrupted
+    # activation's rollback snapshot. Resolve it before any manual mutation.
+    local transaction="/var/lib/psiphon-3x-ui-updater/transaction.json"
+    if [[ -e "${transaction}" || -L "${transaction}" ]]; then
+        die "An interrupted panel update needs recovery first. Run: sudo /usr/bin/python3 -I /var/lib/psiphon-3x-ui-updater/recovery.py recover --after-job"
+    fi
+}
+
 detect_distro() {
     if [[ -r /etc/os-release ]]; then
         # shellcheck disable=SC1091
@@ -239,6 +278,8 @@ run_uninstall() {
         info "Uninstall cancelled."
         exit 0
     fi
+    require_root
+    acquire_install_lock
 
     # ── Phase 27 (item 3): clean the 3x-ui entries this panel created ──────
     # Run BEFORE stopping the service so the venv + DB are still intact.
@@ -281,6 +322,20 @@ run_uninstall() {
 
     systemctl stop psiphon-3x-ui.service 2>/dev/null || true
     systemctl disable psiphon-3x-ui.service 2>/dev/null || true
+    # The caller holds the same operation lock as download/install. Stop any
+    # queued worker before deleting its protected code and persistent state.
+    systemctl stop psiphon-3x-ui-update-download.service \
+        psiphon-3x-ui-update-install.service 2>/dev/null || true
+    systemctl disable --now psiphon-3x-ui-update-recover.service 2>/dev/null || true
+    rm -f /etc/systemd/system/psiphon-3x-ui-update-download.service \
+        /etc/systemd/system/psiphon-3x-ui-update-install.service \
+        /etc/systemd/system/psiphon-3x-ui-update-recover.service \
+        /etc/systemd/system/psiphon-3x-ui.service.d/50-panel-update.conf
+    rmdir /etc/systemd/system/psiphon-3x-ui.service.d 2>/dev/null || true
+    rm -f /usr/local/libexec/psiphon-3x-ui/update_panel.py
+    # Fixed root-owned workspace includes staged source and candidate venvs.
+    # Never remove the /run lock inode while this installer still holds it.
+    rm -rf /var/lib/psiphon-3x-ui-updater
     rm -f /etc/systemd/system/psiphon-3x-ui.service
 
     # Hotfix #9: stop + remove the per-country templated tunnel unit + the
@@ -483,6 +538,7 @@ EOF
     esac
 
     require_root
+    acquire_install_lock
     echo "${COLOR_INFO}== Psiphon-3X-UI installer ==${COLOR_RESET}"
     require_ubuntu_like
     ensure_install_dir
@@ -496,12 +552,14 @@ EOF
     # runs first because shellcheck checks can't see across files. https_install
     # runs ahead of panel_install so the latter can pick up ${PANEL_TLS_CERT}
     # / ${PANEL_TLS_KEY} into panel.env + the systemd ExecStart.
-    for helper in deps prepare_user prompt psiphon_install https_install panel_install; do
+    for helper in deps prepare_user prompt psiphon_install https_install update_install panel_install; do
         # shellcheck disable=SC1090,SC1091
         source "${INSTALLER_DIR}/${helper}.sh" || die "Failed to load ${helper}.sh"
     done
 
     run_deps
+    /usr/bin/python3 -I -c 'import sys; sys.exit(sys.version_info < (3, 10))' \
+        || die "The panel updater requires /usr/bin/python3 3.10+ (Ubuntu 22.04+ recommended)."
     run_prepare_user      # creates psiphon3xui user/group + sets prefix ownership
     run_prompt            # sets PANEL_PORT, PANEL_USER, PANEL_PASS (HTTPS prompt removed — feature parked)
     run_psiphon_install   # builds psiphon-tunnel-core from the pinned tag (needs the group)

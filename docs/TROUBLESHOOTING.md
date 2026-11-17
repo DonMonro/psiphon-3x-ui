@@ -51,6 +51,63 @@ Then re-run `sudo bash /path/to/install.sh` (idempotent — it will rebuild).
   `Settings` row — a fresh `--password` will replace the bcrypt hash) or
   `${VENV_DIR}/bin/python -m panel.seed --port ... --user ... --password ...` directly.
 
+### In-panel updates
+
+The **Update** button and availability notification use the same staged flow:
+check, download, then explicit installation confirmation. A downloaded update
+can wait until you choose **Install**; the six-hour checker only reports
+availability. The updater follows `main`, so a different revision can be offered
+even when the version number is unchanged.
+
+- **Updates unavailable:** install the current source with the normal installer
+  once to register the root-owned helper, update services, recovery service and
+  polkit rule. Development hosts without Linux/systemd cannot install updates.
+- **Check/download failed:** confirm outbound HTTPS access to `api.github.com`,
+  `raw.githubusercontent.com` and `codeload.github.com`, system time and available
+  disk space. GitHub rate limits or a changed candidate produce an error; use
+  **Check again**. An error is not treated as proof that the panel is up to date.
+- **Build failed:** the previous panel keeps running while the new environment is
+  built. Check network access to PyPI and the worker journal. Retry after fixing
+  the cause; the installer never executes a download before confirmation.
+- **Disconnected during install:** the panel restarts near the end of installation.
+  Leave the page open while it reconnects. Success requires a durable worker
+  result and the expected running build. If it times out, use **Refresh status**
+  before submitting another installation.
+- **Another operation is active:** a shared lock excludes concurrent downloads,
+  updates, manual installs and uninstalls. Let the current operation finish; do
+  not delete its lock file or state while it runs.
+- **Recovery pending:** panel changes remain paused while the installer is still
+  running or its activation transaction is incomplete, even after a timeout.
+  Sign-in and update status remain available. Check the journal and follow the
+  recovery steps below if the status does not clear.
+
+Inspect the fixed update services:
+
+```bash
+sudo journalctl -u psiphon-3x-ui-update-download.service -u psiphon-3x-ui-update-install.service -n 150 --no-pager
+```
+
+```bash
+sudo systemctl status psiphon-3x-ui.service psiphon-3x-ui-update-recover.service
+```
+
+The worker stores its result and protected staging under
+`/var/lib/psiphon-3x-ui-updater`. Panel requests/cache live in
+`/opt/psiphon-3x-ui/updates`. The boot recovery service restores an interrupted
+activation before the panel starts. If rollback itself fails, inspect the error
+in the journal and retain the state directory for diagnosis; do not assume the
+previous build has been restored. A normal reinstall reselects the base venv and
+removes only the updater's `50-panel-update.conf` ExecStart override, preserving
+operator-created service drop-ins. A manual reinstall refuses to proceed while
+`transaction.json` exists, preserving rollback evidence. After inspecting the
+worker journal, finish recovery using the saved helper before retrying:
+
+```bash
+sudo /usr/bin/python3 -I /var/lib/psiphon-3x-ui-updater/recovery.py recover --after-job
+```
+
+The helper requires `/usr/bin/python3` 3.10 or newer and `python3-venv`.
+
 ### TLS certificate renewal
 
 Renewed PEM files at unchanged paths are picked up automatically by the panel's

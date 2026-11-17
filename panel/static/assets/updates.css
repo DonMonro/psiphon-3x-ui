@@ -1,0 +1,156 @@
+/* Shared update chrome follows the authenticated pages' Night-Ops tokens. */
+main.container > nav.container-fluid {
+  flex-wrap: wrap;
+  gap: .65rem 1rem;
+}
+main.container > nav.container-fluid > ul:first-child {
+  flex: 1 1 20rem;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+main.container > nav.container-fluid > ul:first-child > li {
+  white-space: normal;
+}
+main.container > nav.container-fluid > ul.panel-header-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  padding: 0;
+}
+main.container > nav.container-fluid > ul.panel-header-actions > li {
+  padding: 0;
+}
+button.panel-update-btn {
+  background: var(--no-accent-soft);
+  border: 1px solid var(--no-accent-hi);
+  border-radius: var(--no-radius-ctl);
+  color: var(--no-text);
+  font-size: .8rem;
+  font-weight: 600;
+  padding: .35rem .9rem;
+  margin: 0;
+  letter-spacing: .02em;
+  white-space: nowrap;
+}
+button.panel-update-btn:hover:not([disabled]) {
+  background: var(--no-accent);
+  border-color: var(--no-accent-hi);
+  box-shadow: none;
+}
+[data-panel-updates] [hidden] { display: none !important; }
+.updates-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: .85rem 1.25rem;
+  margin: 0 0 1.25rem;
+  padding: .95rem 1.15rem;
+  border: 1px solid var(--no-hairline-2);
+  border-left: 3px solid var(--no-accent-hi);
+  border-radius: var(--no-radius-ctl);
+  background: var(--no-surface);
+  color: var(--no-text);
+}
+.updates-banner[data-phase="failed"] { border-left-color: var(--no-err); }
+.updates-banner[data-phase="succeeded"] { border-left-color: var(--no-ok); }
+.updates-copy { flex: 1 1 24rem; min-width: 0; }
+.updates-copy strong { font-size: .95rem; font-weight: 600; }
+.updates-copy p {
+  margin: .3rem 0 0;
+  max-width: 76ch;
+  color: var(--no-text-2);
+  font-size: .85rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.updates-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: .6rem;
+}
+.updates-actions button {
+  margin: 0;
+  padding: .45rem .85rem;
+  font-size: .85rem;
+}
+.updates-copy .updates-error,
+.updates-dialog .updates-error { color: #fca5a5; }
+.updates-copy .updates-wait,
+.updates-dialog .updates-wait { color: #fcd34d; }
+.updates-dialog {
+  width: min(34rem, calc(100% - 2rem));
+  max-height: calc(100dvh - 2rem);
+  margin: auto;
+  padding: 0;
+  border: 1px solid var(--no-hairline-2);
+  border-radius: var(--no-radius-card);
+  background: var(--no-surface);
+  color: var(--no-text);
+  overflow-y: auto;
+  box-shadow: 0 24px 64px rgba(0,0,0,.6);
+}
+/* Pico makes open dialogs fill the viewport. This native dialog keeps its
+   own frame; the browser supplies the modal top layer and focus containment. */
+.updates-dialog[open] { display: block; }
+.updates-dialog::backdrop { background: rgba(4,6,10,.78); }
+.updates-dialog > article {
+  max-width: none;
+  margin: 0;
+  padding: 1.5rem 1.75rem;
+  border: 0;
+  border-radius: 0;
+  background: var(--no-surface);
+  box-shadow: none;
+}
+.updates-dialog h2 {
+  margin: 0 0 1rem;
+  color: var(--no-text);
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+.updates-dialog p { font-size: .9rem; line-height: 1.6; color: var(--no-text-2); }
+.updates-dialog strong { color: var(--no-text); }
+.updates-dialog .updates-revision { font-size: .78rem; }
+.updates-dialog code {
+  background: var(--no-input);
+  color: var(--no-text-2);
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.updates-dialog > article > footer {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: .65rem;
+  margin: 1.25rem 0 0;
+  padding: 1rem 0 0;
+  background: transparent;
+  border-top: 1px solid var(--no-hairline);
+}
+.updates-dialog footer button { width: auto; margin: 0; font-size: .9rem; }
+button.panel-update-btn:focus-visible,
+.updates-banner :is(button, a):focus-visible,
+.updates-dialog button:focus-visible,
+.updates-banner:focus-visible {
+  outline: 2px solid var(--no-accent-hi);
+  outline-offset: 3px;
+  box-shadow: none;
+}
+@media (max-width: 640px) {
+  main.container > nav.container-fluid > ul.panel-header-actions {
+    flex: 1 1 100%;
+    justify-content: flex-end;
+  }
+  .updates-banner { padding: .9rem; }
+  .updates-actions { width: 100%; justify-content: flex-end; }
+  .updates-dialog > article { padding: 1.25rem 1.1rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  button.panel-update-btn,
+  .updates-banner *,
+  .updates-dialog,
+  .updates-dialog * { transition: none; animation: none; }
+}

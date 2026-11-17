@@ -464,6 +464,7 @@ class TestStartup:
                 tls_cert=cert,
                 tls_key=key,
                 tls_reload_interval=60,
+                update_check_interval=0,
             ),
         )
         started, cancelled = asyncio.Event(), asyncio.Event()

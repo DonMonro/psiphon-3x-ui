@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from . import runtime, tls_reload
+from . import __version__, get_build_revision, runtime, tls_reload, updates
 from .auth import (
     CSRF_COOKIE_NAME,
     CSRF_HEADER_NAME,
@@ -42,6 +42,8 @@ from .config import get_settings, load_countries
 from .dashboard.router import router as dashboard_router
 from .db import get_db, init_db
 from .models import Settings
+from .update_router import UpdateMaintenanceMiddleware
+from .update_router import router as update_router
 from .wizard.router import router as wizard_router
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -65,21 +67,30 @@ async def lifespan(app: FastAPI):
                 name="tls-reload-watchdog",
             )
 
+    update_task: asyncio.Task | None = None
+    if getattr(settings, "update_check_interval", 0) > 0:
+        update_task = asyncio.create_task(
+            updates.get_manager().watchdog(), name="panel-update-checker"
+        )
+
     try:
         yield
     finally:
-        if reload_task is not None:
-            reload_task.cancel()
+        tasks = [task for task in (reload_task, update_task) if task is not None]
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
             with contextlib.suppress(asyncio.CancelledError):
-                await reload_task
+                await task
 
 
 app = FastAPI(
     title="Psiphon-3X-UI",
     description="Psiphon companion panel for Sanaei 3x-ui.",
-    version="1.0.5",
+    version=__version__,
     lifespan=lifespan,
 )
+app.add_middleware(UpdateMaintenanceMiddleware)
 
 
 # ---------------------------------------------------------------------------
@@ -88,7 +99,7 @@ app = FastAPI(
 @app.get("/api/health", tags=["meta"])
 def health() -> dict:
     """Liveness probe used by systemd and the wizard's preflight check."""
-    return {"status": "ok", "version": app.version}
+    return {"status": "ok", "version": app.version, "revision": get_build_revision()}
 
 
 @app.get("/api/countries", tags=["countries"])
@@ -288,6 +299,9 @@ app.include_router(wizard_router, prefix="/api/wizard", tags=["wizard"])
 # enforces that gate per-request via _require_wizard_completed.
 # ---------------------------------------------------------------------------
 app.include_router(dashboard_router, prefix="/api/dashboard", tags=["dashboard"])
+
+# Updates are available during first-run setup as well as on the dashboard.
+app.include_router(update_router, prefix="/api/updates", tags=["updates"])
 
 
 # ---------------------------------------------------------------------------

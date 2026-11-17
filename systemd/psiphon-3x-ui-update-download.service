@@ -1,0 +1,31 @@
+[Unit]
+Description=Psiphon-3X-UI staged update download
+Documentation=https://github.com/DonMonro/psiphon-3x-ui
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/
+RuntimeDirectory=psiphon-3x-ui-updater
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+ExecStart=/usr/bin/python3 -I /usr/local/libexec/psiphon-3x-ui/update_panel.py download --prefix /opt/psiphon-3x-ui --user psiphon3xui --group psiphon3xui
+ExecStopPost=/usr/bin/python3 -I /var/lib/psiphon-3x-ui-updater/recovery.py recover --download-job --prefix /opt/psiphon-3x-ui --user psiphon3xui --group psiphon3xui
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/opt/psiphon-3x-ui/updates /var/lib/psiphon-3x-ui-updater /run/psiphon-3x-ui-updater
+UMask=0077
+TimeoutStartSec=900s
+TimeoutStopSec=30s
+KillMode=control-group
