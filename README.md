@@ -88,17 +88,20 @@ inbound ports yourself.
 
 ### Upgrading
 
-Use **Update** beside Logout in the dashboard or setup wizard. It checks for a
-new build, downloads it when available, and opens an **Install update** dialog.
+Use **Check for Updates** below the version at the bottom of the dashboard or
+setup wizard. It checks for a new build, downloads it when available, and opens
+an **Install update** dialog. If the panel is current, the control shows green
+**Up to date** for 3 seconds; available updates use yellow.
 Choose **Later** to keep the download for another time. Installation starts only
 after you confirm that specific downloaded build.
 
-The server also checks every **6 hours**, including an overdue check after
-startup. An available update appears as a persistent notification when you open
-the panel, with a **Download** action. Automatic checks never download or install
-an update. Keep the panel service running for these checks; no browser tab needs
+The server also checks every **5 minutes**, including an overdue check after
+startup. An available update appears in a speech bubble beside the version, with
+a **Download** action. The bubble stays visible while hovered and disappears after
+5 seconds otherwise. The footer action stays available after the bubble closes.
+Automatic checks never download or install an update. Keep the panel service running for these checks; no browser tab needs
 to stay open. Set `PSIPHON3XUI_UPDATE_CHECK_INTERVAL=0` in `panel.env` to disable
-automatic checks (the default is `21600` seconds).
+automatic checks (the default is `300` seconds).
 
 Updates follow this repository's **main** branch, matching the installer. Each
 update is pinned to the exact commit found by the check. Recorded build revisions

@@ -1,4 +1,4 @@
-/* Shared dashboard/wizard update controls. The server owns the six-hour check;
+/* Shared dashboard/wizard update controls. The server owns the five-minute check;
  * browser polling reads cached status only. No transition grants install consent.
  */
 (function (global) {
@@ -10,6 +10,49 @@
   const REVISION = /^[a-f0-9]{40}$/;
   const JOB = /^[a-f0-9]{32}$/;
   const VERSION = /^\d+\.\d+\.\d+$/;
+
+  // One footer callout serves update status and ordinary panel feedback. A
+  // repeated cached status must not bring back a callout that already expired.
+  class Notification {
+    constructor(options = {}) {
+      this.setTimer = options.setTimer || global.setTimeout.bind(global);
+      this.clearTimer = options.clearTimer || global.clearTimeout.bind(global);
+      this.onChange = options.onChange || (() => {});
+      this.current = null;
+      this.timer = null;
+      this.hovered = false;
+      this.focused = false;
+    }
+
+    show(message) {
+      this.current = message;
+      this.schedule();
+      this.onChange();
+    }
+
+    schedule() {
+      this.clearTimer(this.timer);
+      this.timer = null;
+      if (!this.current || this.hovered || this.focused) return;
+      this.timer = this.setTimer(() => {
+        this.timer = null;
+        this.current = null;
+        this.hovered = false;
+        this.focused = false;
+        this.onChange();
+      }, 5000);
+    }
+
+    hold(source, held) {
+      this[source] = held;
+      this.schedule();
+    }
+
+    destroy() {
+      this.clearTimer(this.timer);
+      this.current = null;
+    }
+  }
 
   class RequestError extends Error {
     constructor(message, status = 0, csrfRejected = false) {
@@ -62,10 +105,44 @@
       this.timer = null;
       this.destroyed = false;
       this.requests = new Set();
+      this.upToDate = false;
+      this.feedbackTimer = null;
+      this.awaitingCheck = false;
+      this.lastUpdateKey = null;
+      this.notification = new Notification({
+        setTimer: this.setTimer, clearTimer: this.clearTimer, onChange: () => this.emit(),
+      });
     }
 
     emit() {
-      if (!this.destroyed) this.renderView(this);
+      if (this.destroyed) return;
+      const model = this.model();
+      const key = JSON.stringify([model.title, model.detail, model.error, model.blockMessage,
+        model.action, model.signIn]);
+      if (model.visible && key !== this.lastUpdateKey) {
+        this.lastUpdateKey = key;
+        this.notification.show({
+          key, title: model.title, detail: model.detail, error: model.error,
+          blockMessage: model.blockMessage, action: model.action, label: model.label,
+          signIn: model.signIn, kind: model.error ? "err" : model.triggerState === "available"
+            ? "warn" : this.upToDate || this.verified ? "ok" : "",
+        });
+      }
+      this.renderView(this);
+    }
+
+    notify(message, kind = "ok") {
+      if (this.destroyed || !text(message)) return;
+      this.notification.show({
+        key: `notice:${message}`, title: message, detail: "", error: "",
+        blockMessage: "", action: "", label: "", signIn: false, kind,
+      });
+    }
+
+    clearFeedback() {
+      this.clearTimer(this.feedbackTimer);
+      this.feedbackTimer = null;
+      this.upToDate = false;
     }
 
     isInstalling() {
@@ -151,6 +228,19 @@
       this.status = status;
       this.statusError = false;
       this.authExpired = false;
+      if (status.phase !== "idle") this.clearFeedback();
+      if (this.awaitingCheck && status.phase !== "checking") {
+        this.awaitingCheck = false;
+        if (status.supported && status.phase === "idle" && !status.update_available
+            && status.install_guard !== true && !status.error) {
+          this.upToDate = true;
+          this.feedbackTimer = this.setTimer(() => {
+            this.upToDate = false;
+            this.feedbackTimer = null;
+            this.emit();
+          }, 3000);
+        }
+      }
       if (status.phase !== "idle" || !status.supported || status.install_guard === true) this.visible = true;
       // A failed install enqueue restores the previously ready cache entry.
       // Drop the local restart watch when the server proves that exact job is
@@ -219,6 +309,8 @@
     }
 
     failure(error, prefix = "Could not read update status") {
+      this.awaitingCheck = false;
+      this.clearFeedback();
       this.visible = true;
       this.statusError = true;
       this.authExpired = error.status === 401;
@@ -249,6 +341,7 @@
 
     async refreshNow() {
       // This reads cached status, including after an ambiguous install response.
+      this.lastUpdateKey = null;
       this.timedOut = false;
       this.authExpired = false;
       if (this.watch) this.watch.started = this.now();
@@ -257,12 +350,14 @@
 
     async perform(action, body) {
       if (this.destroyed || this.busy()) return;
-      // A user can click Update before the initial cached-status read finishes.
+      // A user can check before the initial cached-status read finishes.
       // The check endpoint validates support and serializes operations itself,
       // so that first click must still issue a check rather than silently return.
       if (this.statusError || this.status?.supported === false
           || (!this.status && action !== "check")) return this.refreshNow();
       this.action = action;
+      this.clearFeedback();
+      this.awaitingCheck = action === "check";
       this.epoch++;
       this.visible = true;
       this.error = "";
@@ -291,6 +386,17 @@
       return this.perform("check", {});
     }
 
+    activate() {
+      // Every state remains reachable after its temporary callout disappears.
+      if (this.timedOut || this.statusError || this.status?.supported === false
+          || this.status?.install_guard === true
+          || (this.status?.phase === "succeeded" && !this.verified)) return this.refreshNow();
+      if (this.verified) return this.reload();
+      if (ready(this.status)) return this.review();
+      if (this.status?.phase === "available") return this.download();
+      return this.check();
+    }
+
     async download() {
       if (!candidate(this.status) || this.status.phase !== "available") return;
       return this.perform("download", { revision: this.status.available_revision });
@@ -299,6 +405,7 @@
     review() {
       if (!ready(this.status) || !this.status.supported || this.busy() || this.statusError) return;
       this.error = "";
+      this.lastUpdateKey = null;
       this.pendingPrompt = true;
       this.maybePrompt();
       this.emit();
@@ -370,13 +477,15 @@
     destroy() {
       this.destroyed = true;
       this.clearTimer(this.timer);
+      this.clearFeedback();
+      this.notification.destroy();
       for (const request of this.requests) request.abort();
     }
 
     model() {
       const status = this.status;
       const version = status?.available_version || "";
-      const interval = status?.check_interval_seconds ?? 21600;
+      const interval = status?.check_interval_seconds ?? 300;
       const cadence = interval === 0 ? "Automatic update checks are disabled."
         : `Automatic update checks run every ${interval % 3600 === 0
           ? `${interval / 3600} ${interval === 3600 ? "hour" : "hours"}`
@@ -427,11 +536,28 @@
       }
       if (this.statusError && !this.watch) { action = "refresh"; label = "Refresh status"; }
       const blocked = (ready(status) || !!this.dialogTarget || this.verified) && this.hostBusy();
+      const needsRefresh = this.timedOut || this.statusError || status?.supported === false
+        || (status?.install_guard === true && status.phase !== "installing")
+        || (status?.phase === "succeeded" && !this.verified);
+      let triggerLabel = "Check for Updates", triggerState = "";
+      if (needsRefresh) triggerLabel = "Refresh status";
+      else {
+        if (this.upToDate) { triggerLabel = "Up to date"; triggerState = "current"; }
+        else if (this.watch || status?.phase === "installing") triggerLabel = "Installing…";
+        else if (this.action === "check" || status?.phase === "checking") triggerLabel = "Checking…";
+        else if (this.action === "download" || status?.phase === "downloading") {
+          triggerLabel = "Downloading…"; triggerState = "available";
+        } else if (status?.phase === "available") {
+          triggerLabel = "Update available"; triggerState = "available";
+        } else if (status?.phase === "ready") {
+          triggerLabel = "Install update…"; triggerState = "available";
+        } else if (this.verified) triggerLabel = "Reload panel";
+      }
       return {
-        title, detail, action, label, blocked,
+        title, detail, action, label, blocked, triggerLabel, triggerState,
         visible: this.visible || !!this.error,
-        triggerDisabled: !!this.action || status?.install_guard === true
-          || (!this.timedOut && (ACTIVE.has(status?.phase) || !!this.watch)),
+        triggerDisabled: !!this.action || (!needsRefresh
+          && (status?.install_guard === true || ACTIVE.has(status?.phase) || !!this.watch)),
         actionDisabled: !!this.action || ((action === "review" || action === "reload") && blocked),
         blockMessage: blocked ? "Wait for the current panel operation to finish before installing or reloading." : "",
         error: this.error, signIn: this.authExpired,
@@ -440,7 +566,7 @@
   }
 
   const TEMPLATE = `
-    <section class="updates-banner" data-update-banner hidden aria-label="Panel update status" tabindex="-1">
+    <section class="updates-banner" id="update-notification" data-update-banner hidden aria-label="Panel notification" tabindex="0">
       <div class="updates-copy">
         <div role="status" aria-live="polite" aria-atomic="true">
           <strong data-update-title></strong>
@@ -477,6 +603,12 @@
     mount.innerHTML = TEMPLATE;
     const get = name => mount.querySelector(`[data-update-${name}]`);
     const dialog = mount.querySelector("dialog");
+    const banner = get("banner");
+    const listeners = [];
+    const listen = (element, event, handler) => {
+      element.addEventListener(event, handler);
+      listeners.push(() => element.removeEventListener(event, handler));
+    };
     const setText = (element, value) => { if (element.textContent !== value) element.textContent = value; };
     const message = (element, value) => { setText(element, value); element.hidden = !value; };
     let focusBefore = null;
@@ -484,33 +616,46 @@
     return {
       bind(value) {
         controller = value;
-        trigger.addEventListener("click", () => controller.check());
-        get("primary").addEventListener("click", () => {
+        trigger.setAttribute("aria-live", "polite");
+        listen(trigger, "click", () => controller.activate());
+        listen(banner, "mouseenter", () => controller.notification.hold("hovered", true));
+        listen(banner, "mouseleave", () => controller.notification.hold("hovered", false));
+        listen(banner, "focusin", () => controller.notification.hold("focused",
+          banner.matches(":focus-visible") || !!banner.querySelector(":focus-visible")));
+        listen(banner, "pointerdown", () => controller.notification.hold("focused", false));
+        listen(banner, "focusout", event => {
+          if (!banner.contains(event.relatedTarget)) controller.notification.hold("focused", false);
+        });
+        listen(get("primary"), "click", () => {
           const action = controller.model().action;
           if (action === "refresh") controller.refreshNow();
           else if (["download", "review", "check", "reload"].includes(action)) controller[action]();
         });
-        get("later").addEventListener("click", () => controller.cancel());
-        get("confirm").addEventListener("click", () => controller.confirm());
-        dialog.addEventListener("cancel", event => { event.preventDefault(); controller.cancel(); });
-        dialog.addEventListener("close", () => { if (!dialog.open) controller.cancel(); });
+        listen(get("later"), "click", () => controller.cancel());
+        listen(get("confirm"), "click", () => controller.confirm());
+        listen(dialog, "cancel", event => { event.preventDefault(); controller.cancel(); });
+        listen(dialog, "close", () => { if (!dialog.open) controller.cancel(); });
       },
       render(value) {
         const model = value.model();
-        const banner = get("banner");
-        banner.hidden = !model.visible;
+        const notice = value.notification.current;
+        banner.hidden = !notice;
         banner.dataset.phase = value.status?.phase || "idle";
+        banner.dataset.kind = notice?.kind || "";
         trigger.disabled = model.triggerDisabled;
+        trigger.dataset.state = model.triggerState;
+        trigger.setAttribute("aria-expanded", notice ? "true" : "false");
         trigger.setAttribute("aria-busy", value.busy() && !value.timedOut ? "true" : "false");
-        setText(get("title"), model.title);
-        setText(get("detail"), model.detail);
-        message(get("error"), model.error);
-        message(get("wait"), model.blockMessage);
-        get("signin").hidden = !model.signIn;
+        setText(trigger, model.triggerLabel);
+        setText(get("title"), notice?.title || "");
+        message(get("detail"), notice?.detail || "");
+        message(get("error"), notice?.error || "");
+        message(get("wait"), notice?.blockMessage || "");
+        get("signin").hidden = !notice?.signIn;
         const primary = get("primary");
-        primary.hidden = !model.action || model.signIn;
+        primary.hidden = !notice?.action || notice.signIn;
         primary.disabled = model.actionDisabled;
-        setText(primary, model.label);
+        setText(primary, notice?.label || "");
         const target = value.dialogTarget;
         message(get("dialog-error"), value.error);
         message(get("dialog-wait"), model.blockMessage);
@@ -527,11 +672,16 @@
           }
         } else if (dialog.open) {
           dialog.close();
-          const destination = focusBefore?.isConnected && !focusBefore.disabled ? focusBefore
-            : !trigger.disabled ? trigger : banner;
-          destination.focus();
+          const destination = focusBefore?.isConnected && !focusBefore.disabled
+            && !focusBefore.closest("[hidden]") ? focusBefore : !trigger.disabled ? trigger : root;
+          if (destination === root) root.setAttribute("tabindex", "-1");
+          destination.focus({ preventScroll: true });
           focusBefore = null;
         }
+      },
+      destroy() {
+        for (const remove of listeners) remove();
+        if (dialog.open) dialog.close();
       },
     };
   }
@@ -571,6 +721,7 @@
     mounted.set(root, { controller, cleanup() {
       global.removeEventListener("focus", onFocus);
       global.document.removeEventListener("visibilitychange", onFocus);
+      view.destroy();
       for (const [name, original] of originals) host[name] = original;
     } });
     controller.emit();
@@ -585,7 +736,12 @@
     mounted.delete(root);
   }
 
-  const api = { Controller, mount, unmount };
+  function notify(root, message, kind = "ok") {
+    const entry = root && mounted.get(root);
+    if (entry) entry.controller.notify(message, kind);
+  }
+
+  const api = { Controller, Notification, mount, unmount, notify };
   if (typeof module === "object" && module.exports) module.exports = api;
   else global.PanelUpdates = api;
 })(typeof window !== "undefined" ? window : globalThis);

@@ -4,9 +4,9 @@
 
 Updates follow this repository's existing `main` channel. Discovery resolves `DonMonro/psiphon-3x-ui` main to an immutable Git SHA, reads that commit's version, and compares it with the installed version/revision. It never imports fetched Python. Normal installation records the installed SHA. Unknown legacy revisions compare versions; recorded revisions also allow same-version fixes on main. A lower version is never offered. When an installed revision is known, same-version candidates must be verified descendants of that revision so an older/diverged main head is not presented as an upgrade.
 
-The authenticated dashboard and wizard expose an Update button. Clicking it checks and, if needed, downloads the pinned candidate. A persistent notification offers Download for automatically discovered updates. Download completion presents an in-panel confirmation with the exact version. Only an explicit Install action submits installation consent. Closing the prompt leaves the download ready.
+The authenticated dashboard and wizard expose a Check for Updates control below the version at the bottom of the page. Clicking it checks and, if needed, downloads the pinned candidate. A speech bubble beside the version offers Download for automatically discovered updates; it stays visible while hovered and disappears after five seconds otherwise. Download completion presents an in-panel confirmation with the exact version. Only an explicit Install action submits installation consent. Closing the prompt leaves the download ready.
 
-A FastAPI lifespan task checks on startup when due and then every six hours, persisting the last-check time and candidate across panel restarts. The browser polls cached local status; it never schedules upstream checks. All update routes require the current admin session and all POSTs remain under existing CSRF protection.
+A FastAPI lifespan task checks on startup when due and then every five minutes, persisting the last-check time and candidate across panel restarts. The browser polls cached local status; it never schedules upstream checks. All update routes require the current admin session and all POSTs remain under existing CSRF protection.
 
 ## Privilege boundary and storage
 
@@ -33,7 +33,7 @@ Status shape:
 
 ```json
 {
-  "current_version": "1.0.6",
+  "current_version": "1.0.7",
   "current_revision": null,
   "available_version": null,
   "available_revision": null,
@@ -41,7 +41,7 @@ Status shape:
   "update_available": false,
   "last_checked_at": null,
   "next_check_at": null,
-  "check_interval_seconds": 21600,
+  "check_interval_seconds": 300,
   "job_id": null,
   "install_guard": false,
   "message": "",
@@ -57,4 +57,4 @@ Root request shape: `{ "action": "download|install", "job_id": "<32 lower hex UU
 
 ## Verification
 
-Test semantic ordering, same-version revisions, malformed/unavailable upstream responses, persistence and six-hour scheduling, duplicate actions, authentication/CSRF, explicit/stale confirmation, helper path/URL/archive boundaries, build failure and rollback, restart result reconciliation, and frontend notification/download/confirmation/reconnect behavior. Run repository lint/format/test gates and shellcheck. Exercise dashboard and wizard in the browser using a disposable database and a deterministic update adapter; never install a real update on the development host. Build a wheel and verify bundled update assets.
+Test semantic ordering, same-version revisions, malformed/unavailable upstream responses, persistence and five-minute scheduling, duplicate actions, authentication/CSRF, explicit/stale confirmation, helper path/URL/archive boundaries, build failure and rollback, restart result reconciliation, and frontend notification/download/confirmation/reconnect behavior. Run repository lint/format/test gates and shellcheck. Exercise dashboard and wizard in the browser using a disposable database and a deterministic update adapter; never install a real update on the development host. Build a wheel and verify bundled update assets.

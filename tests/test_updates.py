@@ -202,12 +202,24 @@ async def test_get_only_reads_local_state_and_is_honest_when_unsupported(env, mo
     assert error.value.status_code == 503
 
 
-async def test_check_persists_candidate_and_six_hour_deadline_without_download(env):
-    env.settings.update_check_interval = 21600
+def test_update_interval_defaults_to_five_minutes(monkeypatch):
+    monkeypatch.delenv("PSIPHON3XUI_UPDATE_CHECK_INTERVAL", raising=False)
+    assert config.Settings(_env_file=None).update_check_interval == 300
+
+
+@pytest.mark.parametrize("interval", [0, 600])
+def test_update_interval_respects_environment_override(monkeypatch, interval):
+    monkeypatch.setenv("PSIPHON3XUI_UPDATE_CHECK_INTERVAL", str(interval))
+    assert config.Settings(_env_file=None).update_check_interval == interval
+
+
+async def test_check_persists_candidate_and_five_minute_deadline_without_download(env):
+    env.settings.update_check_interval = 300
     first = await env.manager.check()
     assert first["phase"] == "available"
+    assert first["check_interval_seconds"] == 300
     assert first["last_checked_at"] == NOW.isoformat()
-    assert first["next_check_at"] == (NOW + timedelta(hours=6)).isoformat()
+    assert first["next_check_at"] == (NOW + timedelta(minutes=5)).isoformat()
     env.dispatch.assert_not_awaited()
     restored = updates.UpdateManager(env.settings)
     assert await restored.status() == first
@@ -539,7 +551,7 @@ async def test_zero_interval_disables_watch(env):
 
 
 async def test_overdue_watch_starts_promptly_without_downloading(env):
-    env.settings.update_check_interval = 21600
+    env.settings.update_check_interval = 300
     checked = asyncio.Event()
 
     async def candidate(*args):
@@ -559,9 +571,9 @@ async def test_overdue_watch_starts_promptly_without_downloading(env):
 
 
 async def test_watch_uses_persisted_due_time_then_checks(env, monkeypatch):
-    env.settings.update_check_interval = 21600
+    env.settings.update_check_interval = 300
     await env.manager.check()
-    env.advance(3600)
+    env.advance(60)
     restored = updates.UpdateManager(env.settings)
     env.discover.reset_mock()
     sleeps = []
@@ -575,13 +587,13 @@ async def test_watch_uses_persisted_due_time_then_checks(env, monkeypatch):
     monkeypatch.setattr(updates.asyncio, "sleep", advance_sleep)
     with pytest.raises(asyncio.CancelledError):
         await restored.watchdog()
-    assert sleeps == [18000, 21600]
+    assert sleeps == [240, 300]
     env.discover.assert_awaited_once()
     env.dispatch.assert_not_awaited()
 
 
 async def test_watch_cancellation_interrupts_discovery_and_releases_state(env):
-    env.settings.update_check_interval = 21600
+    env.settings.update_check_interval = 300
     entered, cancelled = asyncio.Event(), asyncio.Event()
 
     async def hanging_discovery(*args):
@@ -619,7 +631,7 @@ async def test_dispatch_only_starts_exact_fixed_unit(monkeypatch, action):
 async def test_lifespan_starts_and_cancels_update_checker(env, monkeypatch):
     from panel import main
 
-    env.settings.update_check_interval = 21600
+    env.settings.update_check_interval = 300
     monkeypatch.setattr(main, "get_settings", lambda: env.settings)
     monkeypatch.setattr(main, "init_db", lambda: None)
     monkeypatch.setattr(updates, "get_manager", lambda: env.manager)

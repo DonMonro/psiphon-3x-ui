@@ -53,9 +53,10 @@ Then re-run `sudo bash /path/to/install.sh` (idempotent — it will rebuild).
 
 ### In-panel updates
 
-The **Update** button and availability notification use the same staged flow:
+The **Check for Updates** control below the version and availability notification
+use the same staged flow:
 check, download, then explicit installation confirmation. A downloaded update
-can wait until you choose **Install**; the six-hour checker only reports
+can wait until you choose **Install**; the five-minute checker only reports
 availability. The updater follows `main`, so a different revision can be offered
 even when the version number is unchanged.
 

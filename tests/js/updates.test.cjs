@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { Controller } = require("../../panel/static/assets/updates.js");
+const { Controller, Notification } = require("../../panel/static/assets/updates.js");
 
 const REVISION = "a".repeat(40);
 const JOB = "b".repeat(32);
@@ -14,6 +14,37 @@ const ready = {
   ...candidate, phase: "ready", job_id: JOB,
   available_version: "1.0.6", available_revision: REVISION,
 };
+const idle = {
+  ...candidate, phase: "idle", update_available: false,
+  available_version: null, available_revision: null,
+};
+
+function clock() {
+  let now = 0, next = 0;
+  const timers = new Map();
+  return {
+    now: () => now,
+    setTimer: (callback, delay) => {
+      const id = ++next;
+      timers.set(id, { at: now + delay, callback });
+      return id;
+    },
+    clearTimer: id => timers.delete(id),
+    tick(ms) {
+      const end = now + ms;
+      while (true) {
+        const due = [...timers.entries()].filter(([, timer]) => timer.at <= end)
+          .sort((a, b) => a[1].at - b[1].at)[0];
+        if (!due) break;
+        now = due[1].at;
+        timers.delete(due[0]);
+        due[1].callback();
+      }
+      now = end;
+    },
+    pending: () => timers.size,
+  };
+}
 
 function response(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -192,7 +223,8 @@ test("recovery guard blocks updates and host mutations until root releases it", 
   h.instance.accept(guarded);
   assert.equal(h.instance.isInstalling(), true);
   assert.equal(h.instance.model().action, "refresh");
-  assert.equal(h.instance.model().triggerDisabled, true);
+  assert.equal(h.instance.model().triggerDisabled, false);
+  assert.equal(h.instance.model().triggerLabel, "Refresh status");
   assert.match(h.instance.model().title, /recovery/);
   await h.instance.check();
   await h.instance.perform("download", {revision: REVISION});
@@ -225,10 +257,182 @@ test("recovery guard invalidates consent and withholds reload", () => {
 
 test("notification reflects configured automatic check cadence", () => {
   const h = controller(async () => response(candidate));
+  h.instance.accept(candidate);
+  assert.match(h.instance.model().detail, /every 5 minutes/);
   h.instance.accept({...candidate, check_interval_seconds: 0});
   assert.match(h.instance.model().detail, /Automatic update checks are disabled/);
   h.instance.accept({...candidate, check_interval_seconds: 3600});
   assert.match(h.instance.model().detail, /every 1 hour\./);
   h.instance.accept({...candidate, check_interval_seconds: 21600});
   assert.match(h.instance.model().detail, /every 6 hours/);
+});
+
+test("successful manual check shows green Up to date for exactly three seconds", async () => {
+  const timers = clock();
+  const h = controller(async () => response(idle), timers);
+  await h.instance.refresh();
+  assert.equal(h.instance.model().triggerLabel, "Check for Updates");
+  assert.equal(h.instance.notification.current, null);
+  await h.instance.check();
+  assert.equal(h.instance.model().triggerLabel, "Up to date");
+  assert.equal(h.instance.model().triggerState, "current");
+  timers.tick(2000);
+  await h.instance.refresh();
+  timers.tick(999);
+  assert.equal(h.instance.model().triggerLabel, "Up to date");
+  timers.tick(1);
+  assert.equal(h.instance.model().triggerLabel, "Check for Updates");
+  assert.equal(h.instance.model().triggerState, "");
+  assert.ok(h.instance.notification.current, "bubble has its own five-second lifetime");
+  timers.tick(2000);
+  assert.equal(h.instance.notification.current, null);
+  h.instance.destroy();
+  assert.equal(timers.pending(), 0);
+});
+
+test("failed or unavailable checks never claim to be up to date", async () => {
+  for (const result of [response({detail: "Offline"}, 502),
+    response({...idle, supported: false, unsupported_reason: "Unavailable"}),
+    response({...idle, phase: "failed", error: "Check failed"})]) {
+    const h = controller(async () => result);
+    await h.instance.check();
+    assert.notEqual(h.instance.model().triggerLabel, "Up to date");
+    assert.notEqual(h.instance.model().triggerState, "current");
+  }
+});
+
+test("a newer available status cancels old green feedback", async () => {
+  const timers = clock();
+  const h = controller(async () => response(idle), timers);
+  await h.instance.check();
+  h.instance.accept(candidate);
+  h.instance.emit();
+  assert.equal(h.instance.model().triggerState, "available");
+  assert.equal(h.instance.model().triggerLabel, "Update available");
+  timers.tick(3000);
+  assert.equal(h.instance.model().triggerState, "available");
+  h.instance.destroy();
+});
+
+test("callout stays while hovered or focused and expires five seconds after leaving", () => {
+  const timers = clock();
+  const notice = new Notification(timers);
+  notice.show({key: "one", title: "Saved"});
+  timers.tick(4000);
+  notice.hold("hovered", true);
+  timers.tick(10000);
+  assert.equal(notice.current.title, "Saved");
+  notice.hold("focused", true);
+  notice.hold("hovered", false);
+  timers.tick(10000);
+  assert.ok(notice.current);
+  notice.hold("focused", false);
+  timers.tick(4999);
+  assert.ok(notice.current);
+  timers.tick(1);
+  assert.equal(notice.current, null);
+});
+
+test("cached polls do not revive expired callouts or replace ordinary feedback", async () => {
+  const timers = clock();
+  const h = controller(async () => response(candidate), timers);
+  await h.instance.refresh();
+  timers.tick(5000);
+  assert.equal(h.instance.notification.current, null);
+  await h.instance.refresh();
+  assert.equal(h.instance.notification.current, null);
+  h.instance.notify("Settings saved", "ok");
+  await h.instance.refresh();
+  assert.equal(h.instance.notification.current.title, "Settings saved");
+  timers.tick(4999);
+  assert.ok(h.instance.notification.current);
+  timers.tick(1);
+  assert.equal(h.instance.notification.current, null);
+  await h.instance.refresh();
+  assert.equal(h.instance.notification.current, null);
+  h.instance.destroy();
+});
+
+test("an explicit click shows an expired unsupported or authentication message again", async () => {
+  for (const status of [200, 401]) {
+    const timers = clock();
+    const h = controller(async () => status === 401
+      ? response({detail: "Session expired"}, status)
+      : response({...idle, supported: false, unsupported_reason: "Unsupported installation"}), timers);
+    await h.instance.refresh();
+    timers.tick(5000);
+    assert.equal(h.instance.notification.current, null);
+    await h.instance.activate();
+    assert.ok(h.instance.notification.current);
+    assert.equal(h.instance.notification.current.signIn, status === 401);
+    h.instance.destroy();
+  }
+});
+
+test("footer keeps recovery and reconnect status accessible after the bubble expires", async () => {
+  for (const status of [
+    {...ready, phase: "failed", install_guard: true, error: "Recovery pending"},
+    {...ready, phase: "downloading"},
+    {...ready, phase: "succeeded"},
+  ]) {
+    const timers = clock();
+    const h = controller(async () => response(status), timers);
+    h.instance.accept(status);
+    if (status.phase === "downloading") h.instance.failure(new Error("Offline"));
+    h.instance.emit();
+    timers.tick(5000);
+    assert.equal(h.instance.notification.current, null);
+    assert.equal(h.instance.model().triggerLabel, "Refresh status");
+    assert.equal(h.instance.model().triggerDisabled, false);
+    await h.instance.activate();
+    assert.deepEqual(h.calls.map(call => call.url), ["/api/updates"]);
+    h.instance.destroy();
+  }
+});
+
+test("new feedback replaces the old expiry and repeated feedback restarts its timer", () => {
+  const timers = clock();
+  const h = controller(async () => response(idle), timers);
+  h.instance.notify("First");
+  timers.tick(4000);
+  h.instance.notify("Second", "warn");
+  timers.tick(4000);
+  assert.equal(h.instance.notification.current.title, "Second");
+  assert.equal(h.instance.notification.current.kind, "warn");
+  h.instance.notify("Second", "warn");
+  timers.tick(4999);
+  assert.ok(h.instance.notification.current);
+  timers.tick(1);
+  assert.equal(h.instance.notification.current, null);
+  h.instance.destroy();
+  assert.equal(timers.pending(), 0);
+});
+
+test("expired availability callout leaves a yellow footer action that starts downloading", async () => {
+  const timers = clock();
+  const h = controller(async url => response(url.endsWith("/download")
+    ? {...ready, phase: "downloading"} : candidate), timers);
+  await h.instance.refresh();
+  timers.tick(5000);
+  assert.equal(h.instance.notification.current, null);
+  assert.equal(h.instance.model().triggerState, "available");
+  await h.instance.activate();
+  assert.equal(h.instance.model().triggerLabel, "Downloading…");
+  assert.equal(h.instance.model().triggerState, "available");
+  assert.deepEqual(h.calls.map(call => call.url), ["/api/updates", "/api/updates/download"]);
+  h.instance.destroy();
+});
+
+test("footer can reopen installation confirmation after Later and callout expiry", async () => {
+  const timers = clock();
+  const h = controller(async () => response(ready), timers);
+  await h.instance.refresh();
+  h.instance.review();
+  h.instance.cancel();
+  timers.tick(5000);
+  assert.equal(h.instance.notification.current, null);
+  h.instance.activate();
+  assert.equal(h.instance.dialogTarget.job_id, JOB);
+  assert.equal(h.calls.some(call => call.url.endsWith("/install")), false);
+  h.instance.destroy();
 });

@@ -37,6 +37,18 @@ function boot(page, cookie = "") {
 }
 
 for (const page of ["wizard", "dashboard"]) {
+  test(`${page}: notifications use the Alpine page root from nested controls`, () => {
+    const h = boot(page);
+    const root = {};
+    h.app.$root = root;
+    h.app.$el = { name: "nested button" };
+    const notices = [];
+    h.window.PanelUpdates = { notify: (...args) => notices.push(args) };
+    h.app.notify("Saved");
+    h.app.notify("Select a country", "err");
+    assert.deepEqual(notices, [[root, "Saved", "ok"], [root, "Select a country", "err"]]);
+  });
+
   test(`${page}: read the live cookie on every mutation`, async () => {
     const h = boot(page, "other=value;psiphon3xui_csrf=token-a; last=value");
     assert.equal((await h.app._csrfHeaders())["X-CSRF-Token"], "token-a");
@@ -236,6 +248,9 @@ for (const page of ["wizard", "dashboard"]) {
 
 test("wizard: countries submission recovers CSRF and advances exactly once", async () => {
   const h = boot("wizard", "psiphon3xui_csrf=stale-token");
+  const notices = [];
+  h.app.$root = {};
+  h.window.PanelUpdates = { notify: (root, text, kind) => notices.push({ text, kind }) };
   h.app.form.countries = { mode: "specific", codes: ["US", "GB"] };
   let mutations = 0;
   h.respond(async (url, options) => {
@@ -260,7 +275,9 @@ test("wizard: countries submission recovers CSRF and advances exactly once", asy
   await h.app.submitCountries();
   assert.equal(h.app.state.current_step, "ports");
   assert.equal(h.app.busy, false);
-  assert.equal(h.app.toast.kind, "ok");
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0].kind, "ok");
+  assert.match(notices[0].text, /countries chosen/);
   assert.equal(mutations, 1);
   assert.equal(h.calls.length, 3);
 });
