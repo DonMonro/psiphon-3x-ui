@@ -4,7 +4,7 @@
 
 Updates follow this repository's existing `main` channel. Discovery resolves `DonMonro/psiphon-3x-ui` main to an immutable Git SHA, reads that commit's version, and compares it with the installed version/revision. It never imports fetched Python. Normal installation records the installed SHA. Unknown legacy revisions compare versions; recorded revisions also allow same-version fixes on main. A lower version is never offered. When an installed revision is known, same-version candidates must be verified descendants of that revision so an older/diverged main head is not presented as an upgrade.
 
-The authenticated dashboard and wizard expose a Check for Updates control below the version at the bottom of the page. Clicking it checks and, if needed, downloads the pinned candidate. A speech bubble beside the version offers Download for automatically discovered updates; it stays visible while hovered and disappears after five seconds otherwise. Download completion presents an in-panel confirmation with the exact version. Only an explicit Install action submits installation consent. Closing the prompt leaves the download ready.
+The authenticated dashboard and wizard expose a Check for Updates control below the version at the bottom of the page. Clicking it checks and, if needed, downloads the pinned candidate. A notification bubble at the top right of the screen offers Download for automatically discovered updates; it stays visible while hovered or keyboard-focused and disappears after four seconds otherwise. Download completion presents an in-panel confirmation with the exact version. Only an explicit Install action submits installation consent. Closing the prompt leaves the download ready.
 
 A FastAPI lifespan task checks on startup when due and then every five minutes, persisting the last-check time and candidate across panel restarts. The browser polls cached local status; it never schedules upstream checks. All update routes require the current admin session and all POSTs remain under existing CSRF protection.
 
@@ -33,7 +33,7 @@ Status shape:
 
 ```json
 {
-  "current_version": "1.0.7",
+  "current_version": "1.0.8",
   "current_revision": null,
   "available_version": null,
   "available_revision": null,

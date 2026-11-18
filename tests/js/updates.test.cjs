@@ -283,8 +283,8 @@ test("successful manual check shows green Up to date for exactly three seconds",
   timers.tick(1);
   assert.equal(h.instance.model().triggerLabel, "Check for Updates");
   assert.equal(h.instance.model().triggerState, "");
-  assert.ok(h.instance.notification.current, "bubble has its own five-second lifetime");
-  timers.tick(2000);
+  assert.ok(h.instance.notification.current, "bubble has its own four-second lifetime");
+  timers.tick(1000);
   assert.equal(h.instance.notification.current, null);
   h.instance.destroy();
   assert.equal(timers.pending(), 0);
@@ -314,11 +314,11 @@ test("a newer available status cancels old green feedback", async () => {
   h.instance.destroy();
 });
 
-test("callout stays while hovered or focused and expires five seconds after leaving", () => {
+test("callout stays while hovered or focused and expires four seconds after leaving", () => {
   const timers = clock();
   const notice = new Notification(timers);
   notice.show({key: "one", title: "Saved"});
-  timers.tick(4000);
+  timers.tick(3999);
   notice.hold("hovered", true);
   timers.tick(10000);
   assert.equal(notice.current.title, "Saved");
@@ -327,7 +327,7 @@ test("callout stays while hovered or focused and expires five seconds after leav
   timers.tick(10000);
   assert.ok(notice.current);
   notice.hold("focused", false);
-  timers.tick(4999);
+  timers.tick(3999);
   assert.ok(notice.current);
   timers.tick(1);
   assert.equal(notice.current, null);
@@ -337,14 +337,14 @@ test("cached polls do not revive expired callouts or replace ordinary feedback",
   const timers = clock();
   const h = controller(async () => response(candidate), timers);
   await h.instance.refresh();
-  timers.tick(5000);
+  timers.tick(4000);
   assert.equal(h.instance.notification.current, null);
   await h.instance.refresh();
   assert.equal(h.instance.notification.current, null);
   h.instance.notify("Settings saved", "ok");
   await h.instance.refresh();
   assert.equal(h.instance.notification.current.title, "Settings saved");
-  timers.tick(4999);
+  timers.tick(3999);
   assert.ok(h.instance.notification.current);
   timers.tick(1);
   assert.equal(h.instance.notification.current, null);
@@ -360,7 +360,7 @@ test("an explicit click shows an expired unsupported or authentication message a
       ? response({detail: "Session expired"}, status)
       : response({...idle, supported: false, unsupported_reason: "Unsupported installation"}), timers);
     await h.instance.refresh();
-    timers.tick(5000);
+    timers.tick(4000);
     assert.equal(h.instance.notification.current, null);
     await h.instance.activate();
     assert.ok(h.instance.notification.current);
@@ -380,7 +380,7 @@ test("footer keeps recovery and reconnect status accessible after the bubble exp
     h.instance.accept(status);
     if (status.phase === "downloading") h.instance.failure(new Error("Offline"));
     h.instance.emit();
-    timers.tick(5000);
+    timers.tick(4000);
     assert.equal(h.instance.notification.current, null);
     assert.equal(h.instance.model().triggerLabel, "Refresh status");
     assert.equal(h.instance.model().triggerDisabled, false);
@@ -394,13 +394,13 @@ test("new feedback replaces the old expiry and repeated feedback restarts its ti
   const timers = clock();
   const h = controller(async () => response(idle), timers);
   h.instance.notify("First");
-  timers.tick(4000);
+  timers.tick(3000);
   h.instance.notify("Second", "warn");
-  timers.tick(4000);
+  timers.tick(3000);
   assert.equal(h.instance.notification.current.title, "Second");
   assert.equal(h.instance.notification.current.kind, "warn");
   h.instance.notify("Second", "warn");
-  timers.tick(4999);
+  timers.tick(3999);
   assert.ok(h.instance.notification.current);
   timers.tick(1);
   assert.equal(h.instance.notification.current, null);
@@ -413,7 +413,7 @@ test("expired availability callout leaves a yellow footer action that starts dow
   const h = controller(async url => response(url.endsWith("/download")
     ? {...ready, phase: "downloading"} : candidate), timers);
   await h.instance.refresh();
-  timers.tick(5000);
+  timers.tick(4000);
   assert.equal(h.instance.notification.current, null);
   assert.equal(h.instance.model().triggerState, "available");
   await h.instance.activate();
@@ -429,7 +429,7 @@ test("footer can reopen installation confirmation after Later and callout expiry
   await h.instance.refresh();
   h.instance.review();
   h.instance.cancel();
-  timers.tick(5000);
+  timers.tick(4000);
   assert.equal(h.instance.notification.current, null);
   h.instance.activate();
   assert.equal(h.instance.dialogTarget.job_id, JOB);

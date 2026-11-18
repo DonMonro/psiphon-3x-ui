@@ -11,7 +11,7 @@
   const JOB = /^[a-f0-9]{32}$/;
   const VERSION = /^\d+\.\d+\.\d+$/;
 
-  // One footer callout serves update status and ordinary panel feedback. A
+  // One notification bubble serves update status and ordinary panel feedback. A
   // repeated cached status must not bring back a callout that already expired.
   class Notification {
     constructor(options = {}) {
@@ -40,7 +40,7 @@
         this.hovered = false;
         this.focused = false;
         this.onChange();
-      }, 5000);
+      }, 4000);
     }
 
     hold(source, held) {

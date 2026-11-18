@@ -30,7 +30,7 @@ main.container > nav.container-fluid > ul.panel-header-actions > li {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: .25rem;
+  gap: .5rem;
   max-width: calc(100vw - 2rem);
 }
 .panel-version-controls .version-badge {
@@ -55,25 +55,26 @@ main.container > nav.container-fluid > ul.panel-header-actions > li {
 .version-badge svg { width: 14px; height: 14px; fill: currentColor; flex: none; }
 button.panel-update-btn {
   width: auto;
+  min-height: 2.25rem;
   margin: 0;
-  padding: .2rem .4rem;
-  border: 0;
-  border-radius: .3rem;
-  background: var(--no-bg);
-  box-shadow: none;
-  color: var(--update-trigger-color, var(--no-text-2));
+  padding: .45rem .85rem;
+  border: 1px solid var(--update-trigger-color, var(--no-accent));
+  border-radius: var(--no-radius-ctl);
+  background: var(--no-surface-2);
+  box-shadow: 0 4px 12px rgba(0,0,0,.25);
+  color: var(--update-trigger-color, var(--no-accent-hi));
   font-size: .75rem;
-  font-weight: 500;
+  font-weight: 600;
   line-height: 1.5;
   letter-spacing: .01em;
   white-space: nowrap;
+  transition: background .15s ease, color .15s ease, border-color .15s ease, box-shadow .15s ease;
 }
 button.panel-update-btn:hover:not([disabled]) {
-  background: var(--no-surface-2);
-  color: var(--update-trigger-color, var(--no-text));
-  box-shadow: none;
-  text-decoration: underline;
-  text-underline-offset: .2em;
+  background: var(--no-input);
+  border-color: var(--update-trigger-color, var(--no-accent-hi));
+  color: var(--update-trigger-color, var(--no-accent-hi));
+  box-shadow: 0 4px 16px rgba(0,0,0,.35);
 }
 button.panel-update-btn[data-state="current"] { --update-trigger-color: var(--no-ok); }
 button.panel-update-btn[data-state="available"] { --update-trigger-color: #fcd34d; }
@@ -81,15 +82,16 @@ button.panel-update-btn[disabled] { opacity: 1; }
 [data-panel-updates] [hidden] { display: none !important; }
 .updates-banner {
   --updates-border: var(--no-hairline-2);
-  position: absolute;
-  left: 0;
-  bottom: calc(100% + .85rem);
+  position: fixed;
+  top: max(1rem, env(safe-area-inset-top));
+  right: max(1rem, env(safe-area-inset-right));
+  z-index: 10;
   display: flex;
   flex-direction: column;
   align-items: stretch;
   gap: .8rem;
   width: min(24rem, calc(100vw - 2rem));
-  max-height: calc(100dvh - 8rem);
+  max-height: calc(100dvh - 2rem);
   margin: 0;
   padding: .95rem 1.15rem;
   border: 1px solid var(--updates-border);
@@ -97,25 +99,6 @@ button.panel-update-btn[disabled] { opacity: 1; }
   background: var(--no-surface);
   color: var(--no-text);
   box-shadow: 0 12px 32px rgba(0,0,0,.45);
-}
-.updates-banner::after {
-  content: "";
-  position: absolute;
-  left: 1.15rem;
-  bottom: -.45rem;
-  width: .85rem;
-  height: .85rem;
-  background: var(--no-surface);
-  border-right: 1px solid var(--updates-border);
-  border-bottom: 1px solid var(--updates-border);
-  transform: rotate(45deg);
-}
-/* Extend the hit area across the tail so it is easy to hover the callout. */
-.updates-banner::before {
-  content: "";
-  position: absolute;
-  inset: auto 0 -.9rem;
-  height: .9rem;
 }
 .updates-banner[data-phase="failed"],
 .updates-banner[data-kind="err"] { --updates-border: var(--no-err); }
