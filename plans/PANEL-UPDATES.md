@@ -33,7 +33,7 @@ Status shape:
 
 ```json
 {
-  "current_version": "1.1.0",
+  "current_version": "1.1.1",
   "current_revision": null,
   "available_version": null,
   "available_revision": null,

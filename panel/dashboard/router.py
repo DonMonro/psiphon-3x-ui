@@ -72,6 +72,7 @@ from ..wizard.apply import PortAssignmentSpec, apply_country
 # extended PATCH (enable-with-inbound) and the new _reclone endpoint.
 from ..wizard.clone import clone_for_country
 from ..wizard.ports import listening_ports
+from .metrics import get_system_metrics
 from .xray_routing import apply_country_binding, remove_country_binding
 from .xui_client import XuiClient, XuiClientError
 
@@ -767,6 +768,16 @@ def list_dashboard_countries(
         "enabled_count": sum(1 for c in cards if c["enabled"]),
         "active_count": sum(1 for c in cards if c["unit_active"]),
     }
+
+
+@router.get("/system-metrics", status_code=status.HTTP_200_OK)
+def system_metrics(
+    user: Annotated[dict, Depends(get_current_user)],
+    db: Session = Depends(get_db),  # noqa: B008  FastAPI idiom
+) -> dict[str, Any]:
+    """Return live host resource usage to the authenticated dashboard."""
+    _require_wizard_completed(db)
+    return get_system_metrics()
 
 
 @router.patch("/countries/{code}", status_code=status.HTTP_200_OK)

@@ -353,6 +353,17 @@
     .dashboard-stat.ok strong { color: var(--no-ok); }
     .dashboard-stat.warn strong { color: var(--no-warn); }
     .dashboard-stat.info strong { color: var(--no-accent-hi); }
+    .resource-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .8rem; margin: 0 0 1rem; }
+    .resource-card { min-width: 0; margin: 0; padding: .95rem 1.05rem; background: rgba(255,255,255,.025); border: 1px solid var(--no-hairline); border-radius: 12px; }
+    .resource-card header { display: flex; align-items: center; justify-content: space-between; gap: .5rem; margin-bottom: .5rem; }
+    .resource-card header small { color: var(--no-text-2); font-size: .72rem; font-weight: 700; text-transform: uppercase; }
+    .resource-card strong { color: var(--resource-color, var(--no-ok)); font-size: 1.55rem; line-height: 1.1; }
+    .resource-card p { margin: .45rem 0 0; color: var(--no-text-2); font-size: .75rem; overflow-wrap: anywhere; }
+    .resource-meter { height: .38rem; overflow: hidden; border-radius: 999px; background: rgba(255,255,255,.1); }
+    .resource-meter span { display: block; width: 0; height: 100%; border-radius: inherit; background: var(--resource-color, var(--no-ok)); transition: width .3s ease, background-color .3s ease; }
+    .resource-unavailable { color: var(--no-text-2) !important; }
+    .resource-inline { display: flex; align-items: center; gap: .35rem; color: var(--no-text-2); font-size: .68rem; white-space: nowrap; }
+    .resource-inline .resource-value { color: var(--resource-color, var(--no-ok)); font-weight: 700; font-variant-numeric: tabular-nums; }
     .dashboard-columns { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(18rem, .8fr); gap: 1rem; }
     .dashboard-panel { margin: 0; }
     .dashboard-panel h4 { margin: 0 0 .8rem; color: var(--no-text); }
@@ -368,10 +379,12 @@
     .dashboard-empty::before { content: "✓"; font-weight: 800; }
     @media (max-width: 900px) {
       .dashboard-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .resource-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .dashboard-columns { grid-template-columns: 1fr; }
     }
     @media (max-width: 480px) {
       .dashboard-grid { grid-template-columns: 1fr; }
+      .resource-grid { grid-template-columns: 1fr; }
     }
 
     @media (max-width: 900px) {
@@ -434,6 +447,17 @@
         <button class="outline secondary" @click="refreshAll()" :disabled="busy.countries">
           <span x-text="busy.countries ? 'Refreshing…' : 'Refresh status'"></span>
         </button>
+      </div>
+      <div class="resource-grid" aria-label="Live server resource usage">
+        <template x-for="metric in resourceMetricCards" :key="metric.key">
+          <article class="resource-card" :style="resourceColorStyle(systemMetrics[metric.key])" :aria-label="`${metric.label}: ${metricPercent(systemMetrics[metric.key])}, ${metricValue(systemMetrics[metric.key])}`">
+            <header><small x-text="metric.label"></small><strong :class="{'resource-unavailable': !systemMetrics[metric.key].available}" x-text="metricPercent(systemMetrics[metric.key])"></strong></header>
+            <div class="resource-meter" role="meter" :aria-label="metric.label" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="systemMetrics[metric.key].available ? systemMetrics[metric.key].percent : 0">
+              <span :style="{width: `${metricWidth(systemMetrics[metric.key])}%`}"></span>
+            </div>
+            <p x-text="metricValue(systemMetrics[metric.key])"></p>
+          </article>
+        </template>
       </div>
       <div class="dashboard-grid">
         <article class="dashboard-stat info">
@@ -802,13 +826,17 @@
     </section>
       </div><!-- /.content -->
     </div><!-- /.layout -->
-    <!-- Version and update controls stay together at the bottom of the page. -->
+    <!-- Version, live CPU/RAM indicators, and update controls stay together. -->
     <div class="panel-version-controls">
       <a class="version-badge" href="https://github.com/DonMonro/psiphon-3x-ui" target="_blank" rel="noopener">
         <!-- GitHub mark (official octocat path, simplified) -->
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
-        <span>v1.1.0</span>
+        <span>v1.1.1</span>
       </a>
+      <div class="resource-inline" aria-label="Live server resource usage">
+        <span>CPU</span><span class="resource-value" :style="resourceColorStyle(systemMetrics.cpu)" x-text="metricPercent(systemMetrics.cpu)"></span>
+        <span>RAM</span><span class="resource-value" :style="resourceColorStyle(systemMetrics.memory)" x-text="metricPercent(systemMetrics.memory)"></span>
+      </div>
       <button type="button" class="panel-update-btn" data-update-trigger
               aria-controls="update-notification" aria-expanded="false">Check for Updates</button>
       <div data-panel-updates></div>
@@ -823,6 +851,19 @@
         // Side-menu selection: which section card the content column shows.
         section: "dashboard",
         countries: [],
+        systemMetrics: {
+          cpu: {available: false, unit: "cores"},
+          memory: {available: false, unit: "bytes"},
+          disk: {available: false, unit: "bytes"},
+          swap: {available: false, unit: "bytes"},
+        },
+        resourceMetricCards: [
+          {key: "cpu", label: "CPU"},
+          {key: "memory", label: "Memory"},
+          {key: "disk", label: "Root disk"},
+          {key: "swap", label: "Swap"},
+        ],
+        metricsTimer: null,
         get dashboardStats() {
           const enabled = this.countries.filter(country => country.enabled);
           const linked = enabled.filter(country => country.inbound_id != null);
@@ -900,7 +941,9 @@
             "changePanelPort", "applyHttps", "disableHttps", "pingCountry",
           ]);
           await this.refreshAll();
+          await this.refreshSystemMetrics();
           this.loadHttpsStatus();
+          this.metricsTimer = setInterval(() => this.refreshSystemMetrics(), 5000);
           this.tlsTimer = setInterval(() => {
             if (this.section === "settings" && !this.busy.tls) return this.loadHttpsStatus(true);
           }, 60000);
@@ -909,6 +952,50 @@
         destroy() {
           if (window.PanelUpdates && this.$el) window.PanelUpdates.unmount(this.$el);
           if (this.tlsTimer !== null) clearInterval(this.tlsTimer);
+          if (this.metricsTimer !== null) clearInterval(this.metricsTimer);
+        },
+
+        metricPercent(metric) {
+          if (!metric?.available || !Number.isFinite(Number(metric.percent))) return "--";
+          return `${Math.round(Number(metric.percent))}%`;
+        },
+
+        metricWidth(metric) {
+          if (!metric?.available || !Number.isFinite(Number(metric.percent))) return 0;
+          return Math.max(0, Math.min(100, Number(metric.percent)));
+        },
+
+        resourceColorStyle(metric) {
+          if (!metric?.available || !Number.isFinite(Number(metric.percent))) return {"--resource-color": "var(--no-text-2)"};
+          const hue = Math.round(120 * (1 - this.metricWidth(metric) / 100));
+          return {"--resource-color": `hsl(${hue} 76% 48%)`};
+        },
+
+        formatBytes(value) {
+          let amount = Number(value);
+          if (!Number.isFinite(amount) || amount < 0) return "--";
+          const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+          let unit = 0;
+          while (amount >= 1024 && unit < units.length - 1) { amount /= 1024; unit += 1; }
+          return `${amount.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+        },
+
+        metricValue(metric) {
+          if (!metric?.available) return metric?.message || "Unavailable";
+          if (metric.unit === "cores") return `${Number(metric.used).toFixed(2)} / ${Number(metric.total).toFixed(0)} cores`;
+          return `${this.formatBytes(metric.used)} / ${this.formatBytes(metric.total)}`;
+        },
+
+        async refreshSystemMetrics() {
+          try {
+            const r = await fetch("/api/dashboard/system-metrics", {cache: "no-store"});
+            if (r.status === 401) { window.location.href = "/login"; return; }
+            if (r.status === 409) { window.location.href = "/wizard"; return; }
+            if (!r.ok) throw new Error(`GET /api/dashboard/system-metrics -> ${r.status}`);
+            this.systemMetrics = await r.json();
+          } catch (_) {
+            // Keep the last good sample visible if a later poll fails.
+          }
         },
 
         // Read the live cookie, not a token cached by this tab. Force a

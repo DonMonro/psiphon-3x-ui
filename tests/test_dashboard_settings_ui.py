@@ -114,6 +114,7 @@ function response(status, body) {
   return {
     status, ok: status >= 200 && status < 300,
     text: async () => typeof body === 'string' ? body : JSON.stringify(body),
+    json: async () => typeof body === 'string' ? JSON.parse(body) : body,
   };
 }
 let respond = () => response(200, {changed: true, username: 'ops-admin', rotated: true});
@@ -195,6 +196,40 @@ def test_dashboard_metrics_and_attention_list_use_loaded_country_status(run_js):
     """)
 
 
+def test_server_resource_metrics_are_formatted_and_color_coded(run_js):
+    run_js("""
+      const payload = {
+        cpu: {available: true, percent: 0, used: 0, total: 8, unit: 'cores'},
+        memory: {available: true, percent: 80.4, used: 858993459, total: 1073741824, unit: 'bytes'},
+        disk: {available: true, percent: 100, used: 1024, total: 1024, unit: 'bytes'},
+        swap: {available: false, message: 'Not configured', unit: 'bytes'},
+      };
+      respond = () => response(200, payload);
+      await app.refreshSystemMetrics();
+      assert.deepEqual(plain(app.systemMetrics), payload);
+      assert.equal(app.metricPercent(app.systemMetrics.cpu), '0%');
+      assert.equal(app.metricPercent(app.systemMetrics.memory), '80%');
+      assert.equal(app.metricValue(app.systemMetrics.cpu), '0.00 / 8 cores');
+      assert.equal(app.metricValue(app.systemMetrics.memory), '819.2 MiB / 1.0 GiB');
+      assert.equal(app.metricValue(app.systemMetrics.swap), 'Not configured');
+      assert.equal(app.metricWidth(app.systemMetrics.disk), 100);
+      assert(app.resourceColorStyle(app.systemMetrics.cpu)['--resource-color'].includes('hsl(120 '));
+      assert(app.resourceColorStyle(app.systemMetrics.disk)['--resource-color'].includes('hsl(0 '));
+      assert.equal(app.resourceMetricCards.length, 4);
+      assert(calls.some(call => call.url === '/api/dashboard/system-metrics'));
+    """)
+
+
+def test_dashboard_has_resource_cards_and_near_version_indicators():
+    page = DASHBOARD.read_text(encoding="utf-8")
+    assert page.count("resourceMetricCards: [") == 1
+    assert all(label in page for label in ("Root disk", "Memory", "Swap", "CPU"))
+    assert 'aria-label="Live server resource usage"' in page
+    assert "setInterval(() => this.refreshSystemMetrics(), 5000)" in page
+    version_controls = page.index('<div class="panel-version-controls">')
+    assert page.index('<div class="resource-inline"', version_controls) > version_controls
+
+
 def test_tls_status_reports_active_expiry_not_just_the_disk_file(run_js):
     run_js("""
       respond = () => response(200, {
@@ -240,12 +275,15 @@ def test_tls_periodic_status_refresh_preserves_unsaved_paths(run_js):
       app.tls.cert = '/my/unsaved-cert.pem';
       app.tls.key = '/my/unsaved-key.pem';
       respond = () => response(200, {enabled: false, cert_path: '/server/cert', key_path: '/server/key'});
-      assert.equal(intervals[0].delay, 60000);
-      await intervals[0].callback();
+      const tlsInterval = intervals.find(interval => interval.delay === 60000);
+      const metricInterval = intervals.find(interval => interval.delay === 5000);
+      assert(tlsInterval);
+      assert(metricInterval);
+      await tlsInterval.callback();
       assert.equal(app.tls.cert, '/my/unsaved-cert.pem');
       assert.equal(app.tls.key, '/my/unsaved-key.pem');
       app.destroy();
-      assert.deepEqual(cleared, [7]);
+      assert.deepEqual(cleared, [7, 7]);
     """)
 
 
@@ -267,7 +305,7 @@ def test_current_username_starts_blank_and_init_does_not_overwrite_typing(run_js
       await app.init();
       await new Promise(resolve => setImmediate(resolve));
       assert.equal(app.username.current, 'manually-typed');
-      assert.deepEqual(calls, []);
+      assert.deepEqual(calls.map(call => call.url), ['/api/dashboard/system-metrics']);
     """)
 
 

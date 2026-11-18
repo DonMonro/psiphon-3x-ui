@@ -580,6 +580,42 @@ class TestListCountries:
         assert [c["code"] for c in r.json()["countries"]] == ["DE", "JP", "US"]
 
 
+class TestSystemMetrics:
+    def test_metrics_require_login(self, monkeypatch, tmp_path):
+        client = _client(monkeypatch, tmp_path)
+        response = client.get("/api/dashboard/system-metrics")
+        assert response.status_code == 401
+
+    def test_returns_live_metric_payload(self, monkeypatch, tmp_path):
+        client = _client(monkeypatch, tmp_path)
+        _login(client)
+        from panel.dashboard import router as dashboard_router
+
+        expected = {
+            "cpu": {"available": True, "percent": 12.5, "used": 1, "total": 8, "unit": "cores"},
+            "memory": {"available": True, "percent": 25, "used": 1, "total": 4, "unit": "bytes"},
+            "disk": {"available": True, "percent": 50, "used": 2, "total": 4, "unit": "bytes"},
+            "swap": {"available": False, "message": "Not configured", "unit": "bytes"},
+            "sampled_at": 123.0,
+        }
+        monkeypatch.setattr(dashboard_router, "get_system_metrics", lambda: expected)
+
+        response = client.get("/api/dashboard/system-metrics")
+        assert response.status_code == 200
+        assert response.json() == expected
+
+    def test_unfinished_wizard_blocks_metrics(self, monkeypatch, tmp_path):
+        client = _client(monkeypatch, tmp_path)
+        _login(client)
+        with Session(get_engine()) as session:
+            settings = session.get(Settings, {"id": 1})
+            settings.wizard_completed = False
+            session.commit()
+
+        response = client.get("/api/dashboard/system-metrics")
+        assert response.status_code == 409
+
+
 # ===========================================================================
 # 3. PATCH /api/dashboard/countries/{code}
 # ===========================================================================
