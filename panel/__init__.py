@@ -12,7 +12,7 @@ import re
 from functools import lru_cache
 from pathlib import Path
 
-__version__ = "1.1.1"
+__version__ = "1.1.2"
 _BUILD_METADATA = Path(__file__).resolve().parent / "data" / "build.json"
 
 

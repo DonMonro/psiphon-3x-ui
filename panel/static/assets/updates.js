@@ -638,6 +638,13 @@
       const rect = trigger.getBoundingClientRect();
       const width = Math.min(416, global.innerWidth - 32);
       const left = Math.max(16, Math.min(rect.left, global.innerWidth - width - 16));
+      dialog.style.position = "fixed";
+      dialog.style.top = "auto";
+      dialog.style.right = "auto";
+      dialog.style.width = `${width}px`;
+      dialog.style.maxWidth = `calc(100vw - 32px)`;
+      dialog.style.height = "auto";
+      dialog.style.maxHeight = `${Math.max(160, Math.min(576, global.innerHeight - 128))}px`;
       dialog.style.left = `${left}px`;
       dialog.style.bottom = `${Math.max(16, global.innerHeight - rect.top + 8)}px`;
     };

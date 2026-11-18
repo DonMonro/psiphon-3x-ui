@@ -20,12 +20,12 @@ jobs:
           body: |
             ## Psiphon-3X-UI ${{ github.ref_name }}
 
-            This release adds live CPU, memory, root disk, and swap usage cards to the dashboard,
-            plus compact CPU and RAM indicators beside the application version. The dashboard
-            metrics endpoint is authenticated and refreshes every five seconds.
+            The update confirmation now opens as a compact pop-up above the Update button while
+            retaining the existing version, revision, progress, and confirmation actions. Dashboard
+            CPU and RAM percentages now appear above the application version.
 
-            This release provides GitHub's source code archives only; it does not attach a wheel
-            or checksum bundle.
+            This release includes only GitHub-generated source code archives. No wheel, checksum
+            bundle, or other release assets are attached.
 
             Install on an Ubuntu server with Sanaei 3x-ui already installed:
 

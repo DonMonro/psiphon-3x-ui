@@ -131,14 +131,16 @@ button.panel-update-btn[disabled] { opacity: 1; }
 .updates-dialog .updates-error { color: #fca5a5; }
 .updates-copy .updates-wait,
 .updates-dialog .updates-wait { color: #fcd34d; }
-.updates-dialog {
+dialog.updates-dialog {
   position: fixed;
-  top: auto;
-  right: auto;
+  inset: auto;
   left: max(1rem, env(safe-area-inset-left));
   bottom: calc(3.5rem + env(safe-area-inset-bottom));
   z-index: 11;
-  width: min(26rem, calc(100vw - 2rem));
+  box-sizing: border-box;
+  width: min(416px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+  height: auto;
   max-height: min(36rem, calc(100dvh - 8rem));
   margin: 0;
   padding: 0;
@@ -211,8 +213,7 @@ button.panel-update-btn:focus-visible,
   .updates-banner { padding: .9rem; }
   .updates-actions { justify-content: flex-end; }
   .updates-dialog > article { padding: 1.25rem 1.1rem; }
-  .updates-dialog { left: 1rem; bottom: calc(3.5rem + env(safe-area-inset-bottom));
-    width: calc(100vw - 2rem); max-height: calc(100dvh - 9rem); }
+  dialog.updates-dialog { max-height: calc(100dvh - 9rem); }
 }
 @media (prefers-reduced-motion: reduce) {
   button.panel-update-btn,

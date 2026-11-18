@@ -92,12 +92,30 @@ def test_update_confirmation_is_compact_anchored_and_shows_install_progress():
     assert 'data-update-progress max="100"' in update_js
     assert "data-update-progress-value" in update_js
     assert "data-update-reload" in update_js
-    dialog = _css_block(update_css, ".updates-dialog")
+    dialog = _css_block(update_css, "dialog.updates-dialog")
     assert "position: fixed" in dialog
-    assert "width: min(26rem" in dialog
+    assert "inset: auto" in dialog
+    assert "width: min(416px" in dialog
+    assert "height: auto" in dialog
     assert "left: max(1rem" in dialog
     assert "bottom:" in dialog
+    positioning = re.search(
+        r"const positionDialog = \(\) => \{(.*?)\n    \};", update_js, re.DOTALL
+    )
+    assert positioning
+    assert 'dialog.style.position = "fixed"' in positioning.group(1)
+    assert 'dialog.style.height = "auto"' in positioning.group(1)
+    assert "dialog.style.width" in positioning.group(1)
     assert "showModal()" not in update_js
+
+
+def test_dashboard_live_usage_is_above_the_version_badge():
+    page = DASHBOARD.read_text(encoding="utf-8")
+    controls = re.search(
+        r"<div class=\"panel-version-controls\">(.*?)<div data-panel-updates>", page, re.DOTALL
+    )
+    assert controls
+    assert controls.group(1).index("resource-inline") < controls.group(1).index("version-badge")
 
 
 _JS_HARNESS = r"""
