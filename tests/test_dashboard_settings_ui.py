@@ -8,6 +8,7 @@ Alpine/DOM interactions are checked separately in the browser.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from html.parser import HTMLParser
@@ -16,6 +17,8 @@ from pathlib import Path
 import pytest
 
 DASHBOARD = Path(__file__).resolve().parents[1] / "panel" / "static" / "dashboard.html"
+STATIC = DASHBOARD.parent
+UPDATES_CSS = STATIC / "assets" / "updates.css"
 
 
 class _Markup(HTMLParser):
@@ -37,6 +40,37 @@ def markup():
     parsed = _Markup()
     parsed.feed(DASHBOARD.read_text(encoding="utf-8"))
     return parsed
+
+
+def _css_block(css: str, selector: str) -> str:
+    match = re.search(rf"{re.escape(selector)}\s*\{{(?P<body>.*?)\}}", css, re.DOTALL)
+    assert match, f"{selector} rule must exist"
+    return match.group("body")
+
+
+def test_all_notification_surfaces_use_top_right_placement_and_fresh_shared_css():
+    """Every transient notification must avoid the old lower-corner rules."""
+    for page_name in ("dashboard.html", "wizard.html"):
+        page = (STATIC / page_name).read_text(encoding="utf-8")
+        assert re.search(
+            r'<link\s+rel="stylesheet"\s+href="/static/updates\.css\?v=[^"]+"',
+            page,
+        ), f"{page_name} must cache-bust the shared notification stylesheet"
+
+    shared = _css_block(UPDATES_CSS.read_text(encoding="utf-8"), ".updates-banner")
+    assert re.search(r"\bposition:\s*fixed\b", shared)
+    assert re.search(r"\btop:\s*max\(", shared)
+    assert re.search(r"\bright:\s*max\(", shared)
+    assert not re.search(r"\bbottom:\s*", shared)
+    assert not re.search(r"\bleft:\s*", shared)
+
+    login = (STATIC / "login.html").read_text(encoding="utf-8")
+    toast = _css_block(login, ".toast")
+    assert re.search(r"\bposition:\s*fixed\b", toast)
+    assert re.search(r"\btop:\s*max\(", toast)
+    assert re.search(r"\bright:\s*max\(", toast)
+    assert not re.search(r"\bbottom:\s*", toast)
+    assert not re.search(r"\bleft:\s*", toast)
 
 
 _JS_HARNESS = r"""
