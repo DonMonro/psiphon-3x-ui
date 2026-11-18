@@ -116,6 +116,7 @@ class CachedState(BaseModel):
     job: Job | None = None
     fallback_job: Job | None = None
     install_guard: bool = False
+    progress: int | None = Field(default=None, ge=0, le=100)
     last_checked_at: datetime | None = None
     message: str = Field(default="", max_length=2000)
     error: str | None = Field(default=None, max_length=2000)
@@ -133,6 +134,7 @@ class RootStatus(Candidate):
     phase: Literal["downloading", "ready", "installing", "succeeded", "failed"]
     message: str = Field(default="", max_length=2000)
     error: str | None = Field(default=None, max_length=2000)
+    progress: int | None = Field(default=None, ge=0, le=100)
     updated_at: datetime
 
     @field_validator("updated_at", mode="before")
@@ -505,11 +507,16 @@ class UpdateManager:
                 state.phase = root.phase
                 state.message = root.message
                 state.error = root.error
+                state.progress = root.progress
                 if root.phase == "succeeded" and not self._installed_matches(job):
                     state.phase = "failed"
+                    state.progress = None
                     state.error = "The helper result does not match the running panel build. Check the update service journal."
                 elif root.phase == "failed" and not state.error:
+                    state.progress = None
                     state.error = "The update helper failed. Check its service journal, then retry."
+                elif root.phase == "failed":
+                    state.progress = None
                 if root.phase in {"ready", "succeeded"}:
                     state.fallback_job = None
         if state.phase in {"downloading", "installing"}:
@@ -559,6 +566,7 @@ class UpdateManager:
             "check_interval_seconds": interval,
             "job_id": state.job.job_id if state.job else None,
             "install_guard": state.install_guard,
+            "progress": state.progress,
             "message": state.message,
             "error": state.error,
             "supported": reason is None,
@@ -674,6 +682,7 @@ class UpdateManager:
         )
         state.phase = "downloading" if action == "download" else "installing"
         state.install_guard = action == "install"
+        state.progress = 0 if action == "install" else None
         state.message, state.error = f"Queued panel {action}.", None
         request = {"action": action, "job_id": job_id, **candidate.model_dump()}
         try:

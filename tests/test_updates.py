@@ -434,7 +434,8 @@ async def test_install_success_requires_root_health_result_and_running_identity(
     downloading = await env.manager.check(download=True)
     env.root("ready")
     await env.manager.install(downloading["job_id"], True)
-    env.root("installing")
+    env.root("installing", progress=60)
+    assert (await env.manager.status())["progress"] == 60
     updates.atomic_json(
         env.settings.update_state_dir / "installed.json", env.candidate.model_dump()
     )
@@ -443,9 +444,10 @@ async def test_install_success_requires_root_health_result_and_running_identity(
     monkeypatch.setattr(updates, "get_build_revision", lambda: NEW)
     restarted = updates.UpdateManager(env.settings)
     assert (await restarted.status())["phase"] == "installing"
-    env.root("succeeded")
+    env.root("succeeded", progress=100)
     final = await restarted.status()
     assert final["phase"] == "succeeded"
+    assert final["progress"] == 100
     assert final["current_revision"] == NEW
     assert final["update_available"] is False
     assert (await env.manager.status())["phase"] == "failed", (

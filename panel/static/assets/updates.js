@@ -97,6 +97,7 @@
       this.visible = false;
       this.pendingPrompt = false;
       this.dialogTarget = null;
+      this.installView = false;
       this.watch = null;
       this.timedOut = false;
       this.verified = false;
@@ -157,12 +158,13 @@
 
     async request(path, options = {}) {
       if (this.destroyed) throw new RequestError("Update controls were closed.");
+      const { timeoutMs = this.requestTimeout, ...fetchOptions } = options;
       const abort = new AbortController();
       this.requests.add(abort);
-      const timeout = this.setTimer(() => abort.abort(), this.requestTimeout);
+      const timeout = this.setTimer(() => abort.abort(), timeoutMs);
       try {
         const response = await this.fetch(path, {
-          credentials: "same-origin", cache: "no-store", ...options, signal: abort.signal,
+          credentials: "same-origin", cache: "no-store", ...fetchOptions, signal: abort.signal,
         });
         const raw = await response.text();
         let body;
@@ -325,7 +327,7 @@
       this.polling = true;
       const epoch = this.epoch;
       try {
-        const status = await this.request("/api/updates");
+        const status = await this.request("/api/updates", {timeoutMs: 6000});
         if (epoch !== this.epoch || this.destroyed) return;
         if (this.statusError) this.error = "";
         this.accept(status);
@@ -388,6 +390,11 @@
 
     activate() {
       // Every state remains reachable after its temporary callout disappears.
+      if (this.watch || this.status?.phase === "installing") {
+        this.installView = true;
+        this.emit();
+        return;
+      }
       if (this.timedOut || this.statusError || this.status?.supported === false
           || this.status?.install_guard === true
           || (this.status?.phase === "succeeded" && !this.verified)) return this.refreshNow();
@@ -405,6 +412,7 @@
     review() {
       if (!ready(this.status) || !this.status.supported || this.busy() || this.statusError) return;
       this.error = "";
+      this.installView = true;
       this.lastUpdateKey = null;
       this.pendingPrompt = true;
       this.maybePrompt();
@@ -415,6 +423,7 @@
     cancel() {
       this.dialogTarget = null;
       this.pendingPrompt = false;
+      this.installView = false;
       this.emit();
     }
 
@@ -433,7 +442,7 @@
       try {
         // Revalidate staged identity immediately before consent, even if another
         // tab replaced the job since the dialog was opened.
-        this.accept(await this.request("/api/updates"));
+        this.accept(await this.request("/api/updates", {timeoutMs: 6000}));
         if (this.dialogTarget !== target) return;
         const status = await this.post("install", { job_id: target.job_id, confirm: true }, () => {
           if (this.destroyed || (!sent && this.dialogTarget !== target)) throw new RequestError("Installation cancelled.");
@@ -443,7 +452,9 @@
           if (!sent) {
             sent = true;
             this.watch = { ...target, started: this.now() };
-            this.cancel();
+            this.dialogTarget = null;
+            this.pendingPrompt = false;
+            this.installView = true;
           }
         });
         this.accept(status);
@@ -536,6 +547,9 @@
       }
       if (this.statusError && !this.watch) { action = "refresh"; label = "Refresh status"; }
       const blocked = (ready(status) || !!this.dialogTarget || this.verified) && this.hostBusy();
+      const progress = Number.isInteger(status?.progress) ? status.progress
+        : status?.phase === "succeeded" && this.verified ? 100
+          : status?.phase === "installing" || this.watch ? 0 : null;
       const needsRefresh = this.timedOut || this.statusError || status?.supported === false
         || (status?.install_guard === true && status.phase !== "installing")
         || (status?.phase === "succeeded" && !this.verified);
@@ -557,10 +571,14 @@
         title, detail, action, label, blocked, triggerLabel, triggerState,
         visible: this.visible || !!this.error,
         triggerDisabled: !!this.action || (!needsRefresh
-          && (status?.install_guard === true || ACTIVE.has(status?.phase) || !!this.watch)),
+          && ((status?.install_guard === true && status?.phase !== "installing")
+            || (ACTIVE.has(status?.phase) && status?.phase !== "installing"))),
         actionDisabled: !!this.action || ((action === "review" || action === "reload") && blocked),
         blockMessage: blocked ? "Wait for the current panel operation to finish before installing or reloading." : "",
         error: this.error, signIn: this.authExpired,
+        installOpen: this.installView || !!this.dialogTarget,
+        installProgress: progress,
+        installBusy: this.isInstalling(),
       };
     }
   }
@@ -588,11 +606,16 @@
         <p class="updates-revision">Revision <code data-update-revision></code></p>
         <p id="update-confirm-note">The panel will briefly disconnect while it restarts. Your settings,
           admin credentials, tunnels and 3x-ui configuration are preserved. This updates the companion panel only.</p>
+        <div class="updates-progress" data-update-progress-wrap hidden>
+          <div class="updates-progress-meta"><span data-update-progress-label>Installation progress</span><strong data-update-progress-value>0%</strong></div>
+          <progress data-update-progress max="100" value="0" aria-label="Installation progress"></progress>
+        </div>
         <p class="updates-wait" data-update-dialog-wait hidden></p>
         <p class="updates-error" id="update-confirm-error" data-update-dialog-error role="alert" hidden></p>
         <footer>
           <button type="button" class="secondary" data-update-later autofocus>Later</button>
           <button type="button" data-update-confirm>Install update</button>
+          <button type="button" data-update-reload hidden>Reload panel</button>
         </footer>
       </article>
     </dialog>`;
@@ -611,6 +634,13 @@
     };
     const setText = (element, value) => { if (element.textContent !== value) element.textContent = value; };
     const message = (element, value) => { setText(element, value); element.hidden = !value; };
+    const positionDialog = () => {
+      const rect = trigger.getBoundingClientRect();
+      const width = Math.min(416, global.innerWidth - 32);
+      const left = Math.max(16, Math.min(rect.left, global.innerWidth - width - 16));
+      dialog.style.left = `${left}px`;
+      dialog.style.bottom = `${Math.max(16, global.innerHeight - rect.top + 8)}px`;
+    };
     let focusBefore = null;
     let controller;
     return {
@@ -633,8 +663,11 @@
         });
         listen(get("later"), "click", () => controller.cancel());
         listen(get("confirm"), "click", () => controller.confirm());
+        listen(get("reload"), "click", () => controller.reload());
         listen(dialog, "cancel", event => { event.preventDefault(); controller.cancel(); });
         listen(dialog, "close", () => { if (!dialog.open) controller.cancel(); });
+        listen(global, "resize", positionDialog);
+        listen(global, "scroll", positionDialog);
       },
       render(value) {
         const model = value.model();
@@ -659,16 +692,33 @@
         const target = value.dialogTarget;
         message(get("dialog-error"), value.error);
         message(get("dialog-wait"), model.blockMessage);
+        const installMode = model.installOpen;
+        const installProgress = model.installProgress;
+        const progressWrap = get("progress-wrap");
+        progressWrap.hidden = installProgress === null;
+        if (installProgress !== null) {
+          get("progress").value = installProgress;
+          setText(get("progress-value"), `${installProgress}%`);
+          setText(get("progress-label"), installProgress >= 100 ? "Installation complete" : value.status?.message || "Installation in progress");
+        }
+        get("later").textContent = value.installBusy ? "Close" : "Later";
+        get("confirm").hidden = value.installBusy || !target;
+        get("reload").hidden = !value.verified || value.installBusy;
+        get("reload").disabled = model.actionDisabled;
         get("confirm").disabled = !!value.action || model.blocked || value.statusError;
         get("confirm").setAttribute("aria-busy", value.action === "install" ? "true" : "false");
-        if (target) {
-          setText(get("version"), target.version);
-          setText(get("revision"), target.revision);
-          setText(get("confirm"), `Install version ${target.version}`);
+        const displayTarget = target || value.watch || (value.status?.available_version ? {
+          version: value.status.available_version, revision: value.status.available_revision,
+        } : null);
+        if (installMode && displayTarget) {
+          setText(get("version"), displayTarget.version);
+          setText(get("revision"), displayTarget.revision || "");
+          setText(get("confirm"), `Install version ${displayTarget.version}`);
           if (!dialog.open) {
             focusBefore = root.ownerDocument.activeElement;
-            dialog.showModal();
-            get("later").focus();
+            positionDialog();
+            dialog.show();
+            if (!value.installBusy) get("later").focus();
           }
         } else if (dialog.open) {
           dialog.close();

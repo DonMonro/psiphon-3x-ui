@@ -171,6 +171,27 @@ test("install consent sends the exact captured job once", async () => {
   assert.equal(h.instance.watch.job_id, JOB);
 });
 
+test("install popover reports helper progress and verified completion", () => {
+  const h = controller(async () => response(ready));
+  h.instance.status = ready;
+  h.instance.review();
+  assert.equal(h.instance.model().installOpen, true);
+  assert.equal(h.instance.model().installProgress, null);
+  h.instance.watch = {job_id: JOB, revision: REVISION, version: "1.0.6", started: 0};
+  h.instance.dialogTarget = null;
+  h.instance.installView = true;
+  h.instance.accept({...ready, phase: "installing", progress: 60,
+    message: "Installing candidate dependencies."});
+  assert.equal(h.instance.model().installOpen, true);
+  assert.equal(h.instance.model().installProgress, 60);
+  assert.equal(h.instance.model().installBusy, true);
+  h.instance.accept({...ready, phase: "succeeded", progress: 100,
+    current_version: "1.0.6", current_revision: REVISION});
+  assert.equal(h.instance.model().installProgress, 100);
+  assert.equal(h.instance.model().installBusy, false);
+  assert.equal(h.instance.verified, true);
+});
+
 test("CSRF retry is limited to one fresh token", async () => {
   const h = controller(async (url, options, readCookie, setCookie) => {
     if (url === "/api/updates/check") {

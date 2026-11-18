@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
   <!-- Inter (variable) — same jsDelivr CDN family as Pico/Alpine for cache locality -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/inter@5/index.css">
-  <link rel="stylesheet" href="/static/updates.css?v=2">
+  <link rel="stylesheet" href="/static/updates.css?v=3">
   <style>
     /* ── Night-Ops theme — design tokens ───────────────────────── */
     :root {
@@ -333,6 +333,47 @@
                   border-radius: var(--no-radius-ctl); color: #D7DEE8;
                   font-size: .78rem; padding: .75rem .9rem; }
 
+    /* -- Dashboard overview --------------------------------------------- */
+    .dashboard-grid {
+      display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: .8rem; margin-bottom: 1.25rem;
+    }
+    .dashboard-head { justify-content: space-between; align-items: center; }
+    .dashboard-head button { margin: 0; padding: .35rem .7rem; font-size: .8rem; }
+    .dashboard-stat {
+      min-width: 0; padding: 1rem 1.1rem; margin: 0;
+      background: rgba(255,255,255,.025); border: 1px solid var(--no-hairline);
+      border-radius: 12px;
+    }
+    .dashboard-stat small { display: block; text-transform: uppercase;
+      letter-spacing: .08em; font-size: .7rem; font-weight: 700; }
+    .dashboard-stat strong { display: block; margin-top: .25rem;
+      color: var(--no-text); font-size: 1.8rem; line-height: 1.1; }
+    .dashboard-stat p { margin: .45rem 0 0; font-size: .78rem; }
+    .dashboard-stat.ok strong { color: var(--no-ok); }
+    .dashboard-stat.warn strong { color: var(--no-warn); }
+    .dashboard-stat.info strong { color: var(--no-accent-hi); }
+    .dashboard-columns { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(18rem, .8fr); gap: 1rem; }
+    .dashboard-panel { margin: 0; }
+    .dashboard-panel h4 { margin: 0 0 .8rem; color: var(--no-text); }
+    .dashboard-panel > p { margin-top: -.35rem; font-size: .88rem; }
+    .attention-list { list-style: none; padding: 0; margin: 0; }
+    .attention-list li { display: flex; align-items: flex-start; justify-content: space-between;
+      gap: .8rem; padding: .65rem 0; border-bottom: 1px solid var(--no-hairline); }
+    .attention-list li:last-child { border-bottom: 0; }
+    .attention-country { display: flex; flex-direction: column; gap: .15rem; min-width: 0; }
+    .attention-country strong { color: var(--no-text); }
+    .attention-country small { overflow-wrap: anywhere; }
+    .dashboard-empty { color: var(--no-ok) !important; display: flex; align-items: center; gap: .45rem; }
+    .dashboard-empty::before { content: "✓"; font-weight: 800; }
+    @media (max-width: 900px) {
+      .dashboard-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .dashboard-columns { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 480px) {
+      .dashboard-grid { grid-template-columns: 1fr; }
+    }
+
     @media (max-width: 900px) {
       /* Sidebar collapses into a horizontal pill row above the content.
          align-items must flip back to stretch: flex-start (set above so the
@@ -374,6 +415,8 @@
       ------------------------------------------------------------------ -->
       <aside class="sidebar">
         <nav class="sidebar-nav">
+          <button :class="{ active: section === 'dashboard' }"
+                  @click="section = 'dashboard'">Dashboard</button>
           <button :class="{ active: section === 'countries' }"
                   @click="section = 'countries'">Countries</button>
           <button :class="{ active: section === 'settings' }"
@@ -382,6 +425,64 @@
       </aside>
 
       <div class="content">
+    <!-- -------------------------------------------------------------------
+         Dashboard overview — high-level tunnel and clone health
+    -------------------------------------------------------------------- -->
+    <section class="card" x-show="section === 'dashboard'" x-cloak>
+      <div class="card-head dashboard-head">
+        <div><h3>Dashboard</h3> <small>Tunnel health and country status</small></div>
+        <button class="outline secondary" @click="refreshAll()" :disabled="busy.countries">
+          <span x-text="busy.countries ? 'Refreshing…' : 'Refresh status'"></span>
+        </button>
+      </div>
+      <div class="dashboard-grid">
+        <article class="dashboard-stat info">
+          <small>Countries</small>
+          <strong x-text="dashboardStats.total"></strong>
+          <p x-text="`${dashboardStats.enabled} enabled`"></p>
+        </article>
+        <article class="dashboard-stat" :class="dashboardStats.active === dashboardStats.enabled && dashboardStats.enabled ? 'ok' : 'warn'">
+          <small>Active tunnels</small>
+          <strong x-text="dashboardStats.active"></strong>
+          <p x-text="dashboardStats.enabled ? `${dashboardStats.active} of ${dashboardStats.enabled} enabled` : 'No tunnels enabled'"></p>
+        </article>
+        <article class="dashboard-stat" :class="dashboardStats.healthy === dashboardStats.linked && dashboardStats.linked ? 'ok' : 'warn'">
+          <small>Healthy inbounds</small>
+          <strong x-text="dashboardStats.healthy"></strong>
+          <p x-text="dashboardStats.linked ? `${dashboardStats.healthy} of ${dashboardStats.linked} linked` : 'No linked inbounds'"></p>
+        </article>
+        <article class="dashboard-stat" :class="dashboardStats.attention ? 'warn' : 'ok'">
+          <small>Needs attention</small>
+          <strong x-text="dashboardStats.attention"></strong>
+          <p x-text="dashboardStats.attention ? 'enabled countries to review' : 'All enabled countries look ready'"></p>
+        </article>
+      </div>
+      <div class="dashboard-columns">
+        <article class="dashboard-panel">
+          <h4>Operational status</h4>
+          <p x-show="!countries.length">No country data is available yet.</p>
+          <p x-show="countries.length && !dashboardStats.attention" class="dashboard-empty">All enabled tunnels have an active unit and linked inbound.</p>
+          <ul class="attention-list" x-show="dashboardStats.attention">
+            <template x-for="item in attentionCountries" :key="item.code">
+              <li>
+                <span class="attention-country">
+                  <strong x-text="`${item.flag ? item.flag + ' ' : ''}${item.name} (${item.code})`"></strong>
+                  <small x-text="item.issues.join(' · ')"></small>
+                </span>
+                <button class="outline secondary" @click="section = 'countries'">Review</button>
+              </li>
+            </template>
+          </ul>
+        </article>
+        <article class="dashboard-panel">
+          <h4>What these indicators mean</h4>
+          <p><strong>Active tunnels</strong> checks the live systemd unit for each enabled country.</p>
+          <p><strong>Healthy inbounds</strong> reflects the cached 3x-ui clone health. Use <em>Ping test</em> in Countries to verify egress latency.</p>
+          <button class="outline" @click="section = 'countries'">Open Countries</button>
+        </article>
+      </div>
+    </section>
+
     <!-- -------------------------------------------------------------------
          Countries panel — list + enable/disable + delete
     -------------------------------------------------------------------- -->
@@ -706,7 +807,7 @@
       <a class="version-badge" href="https://github.com/DonMonro/psiphon-3x-ui" target="_blank" rel="noopener">
         <!-- GitHub mark (official octocat path, simplified) -->
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
-        <span>v1.0.9</span>
+        <span>v1.1.0</span>
       </a>
       <button type="button" class="panel-update-btn" data-update-trigger
               aria-controls="update-notification" aria-expanded="false">Check for Updates</button>
@@ -720,8 +821,30 @@
     function appDashboard() {
       return {
         // Side-menu selection: which section card the content column shows.
-        section: "countries",
+        section: "dashboard",
         countries: [],
+        get dashboardStats() {
+          const enabled = this.countries.filter(country => country.enabled);
+          const linked = enabled.filter(country => country.inbound_id != null);
+          return {
+            total: this.countries.length,
+            enabled: enabled.length,
+            active: enabled.filter(country => country.unit_active).length,
+            linked: linked.length,
+            healthy: linked.filter(country => country.healthy).length,
+            attention: this.attentionCountries.length,
+          };
+        },
+        get attentionCountries() {
+          return this.countries.filter(country => country.enabled).map(country => {
+            const issues = [];
+            if (!country.unit_active) issues.push("Tunnel unit inactive");
+            if (!country.assigned) issues.push("Ports not assigned");
+            if (country.inbound_id == null) issues.push("No linked inbound");
+            else if (!country.healthy) issues.push("Inbound unhealthy");
+            return {...country, issues};
+          }).filter(country => country.issues.length > 0);
+        },
         busy: { countries: false, ports: false, reapply: false, backup: false,
                 rotate: false, port: false, reclone: false, ping: "", tls: false,
                 user: false },

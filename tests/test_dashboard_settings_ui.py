@@ -73,6 +73,33 @@ def test_all_notification_surfaces_use_top_right_placement_and_fresh_shared_css(
     assert not re.search(r"\bleft:\s*", toast)
 
 
+def test_dashboard_overview_is_default_and_has_status_indicators():
+    page = DASHBOARD.read_text(encoding="utf-8")
+    assert re.search(r"section:\s*[\"']dashboard[\"']", page)
+    nav = re.search(r"<nav class=\"sidebar-nav\">(.*?)</nav>", page, re.DOTALL)
+    assert nav
+    assert nav.group(1).index(">Dashboard</button>") < nav.group(1).index(">Countries</button>")
+    assert "Active tunnels" in page
+    assert "Healthy inbounds" in page
+    assert "Needs attention" in page
+    assert "cached 3x-ui clone health" in page
+
+
+def test_update_confirmation_is_compact_anchored_and_shows_install_progress():
+    update_js = (STATIC / "assets" / "updates.js").read_text(encoding="utf-8")
+    update_css = UPDATES_CSS.read_text(encoding="utf-8")
+    assert "data-update-progress-wrap" in update_js
+    assert 'data-update-progress max="100"' in update_js
+    assert "data-update-progress-value" in update_js
+    assert "data-update-reload" in update_js
+    dialog = _css_block(update_css, ".updates-dialog")
+    assert "position: fixed" in dialog
+    assert "width: min(26rem" in dialog
+    assert "left: max(1rem" in dialog
+    assert "bottom:" in dialog
+    assert "showModal()" not in update_js
+
+
 _JS_HARNESS = r"""
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -141,6 +168,31 @@ def run_js():
         assert result.stdout.strip() == "dashboard-js-ok", "JavaScript check did not finish"
 
     return run
+
+
+def test_dashboard_metrics_and_attention_list_use_loaded_country_status(run_js):
+    run_js("""
+      assert.equal(app.section, 'dashboard');
+      app.countries = [
+        {code: 'US', name: 'United States', enabled: true, assigned: true,
+         unit_active: true, inbound_id: 11, healthy: true},
+        {code: 'DE', name: 'Germany', enabled: true, assigned: false,
+         unit_active: false, inbound_id: null, healthy: false},
+        {code: 'FR', name: 'France', enabled: true, assigned: true,
+         unit_active: true, inbound_id: 22, healthy: false},
+        {code: 'JP', name: 'Japan', enabled: false, assigned: false,
+         unit_active: false, inbound_id: null, healthy: false},
+      ];
+      assert.deepEqual(plain(app.dashboardStats), {
+        total: 4, enabled: 3, active: 2, linked: 2, healthy: 1, attention: 2,
+      });
+      assert.deepEqual(plain(app.attentionCountries.map(country => ({
+        code: country.code, issues: country.issues,
+      }))), [
+        {code: 'DE', issues: ['Tunnel unit inactive', 'Ports not assigned', 'No linked inbound']},
+        {code: 'FR', issues: ['Inbound unhealthy']},
+      ]);
+    """)
 
 
 def test_tls_status_reports_active_expiry_not_just_the_disk_file(run_js):

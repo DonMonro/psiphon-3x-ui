@@ -257,7 +257,9 @@ def test_success_preserves_data_and_records_verified_build(host, monkeypatch):
     prepare_fake(host, monkeypatch)
     host.updater.install(JOB)
     assert host.updater.installed() == helper.identity(JOB)
-    assert host.files.json(host.paths.state / "status.json")["phase"] == "succeeded"
+    final_status = host.files.json(host.paths.state / "status.json")
+    assert final_status["phase"] == "succeeded"
+    assert final_status["progress"] == 100
     assert host.health == [helper.identity(JOB)]
     assert host.updater.transaction() is None
     assert host.updater.ready() is None

@@ -1024,6 +1024,7 @@ class Updater:
             self.files.mkdir(work / name)
         source = work / "source"
         inspect_archive(archive, request["revision"], request["version"], destination=source)
+        self.status(request, "installing", "Verified the downloaded source archive.", progress=10)
         (source / "panel" / "data").mkdir(mode=0o700, parents=True, exist_ok=True)
         self.files.put_json(source / "panel" / "data" / "build.json", identity(request))
         managed = {}
@@ -1038,12 +1039,14 @@ class Updater:
         if venv.exists():
             raise UpdateError("Candidate virtual environment already exists.")
         environment = clean_environment(work)
+        self.status(request, "installing", "Creating the isolated panel environment.", progress=10)
         run_command(
             ["/usr/bin/python3", "-I", "-m", "venv", "--copies", str(venv)],
             environment=environment,
             timeout=180,
             label="Creating candidate environment",
         )
+        self.status(request, "installing", "Created the isolated panel environment.", progress=20)
         python = str(venv / "bin" / "python")
         pip = [
             python,
@@ -1059,12 +1062,15 @@ class Updater:
             "--index-url",
             "https://pypi.org/simple",
         ]
+        self.status(request, "installing", "Installing panel build tools.", progress=25)
         run_command(
             [*pip, "build", "setuptools>=68", "wheel"],
             environment=environment,
             timeout=600,
             label="Installing build tools",
         )
+        self.status(request, "installing", "Installed the panel build tools.", progress=35)
+        self.status(request, "installing", "Building the panel package.", progress=40)
         run_command(
             [
                 python,
@@ -1081,6 +1087,7 @@ class Updater:
             timeout=600,
             label="Building panel wheel",
         )
+        self.status(request, "installing", "Built and verified the panel package.", progress=50)
         wheels = list((work / "wheels").glob("*.whl"))
         if len(wheels) != 1 or not wheels[0].name.startswith(
             f"psiphon_3x_ui_panel-{request['version']}-"
@@ -1090,17 +1097,30 @@ class Updater:
             info = wheel.getinfo("panel/data/build.json")
             if info.file_size > MAX_JSON or parse_json(wheel.read(info)) != identity(request):
                 raise UpdateError("Built wheel did not preserve source identity.")
+        self.status(
+            request, "installing", "Installing the new panel and its dependencies.", progress=52
+        )
         run_command(
             [*pip, str(wheels[0])],
             environment=environment,
             timeout=600,
             label="Installing candidate dependencies",
         )
+        self.status(
+            request, "installing", "Installed the new panel and its dependencies.", progress=57
+        )
+        self.status(request, "installing", "Checking candidate dependencies.", progress=58)
         run_command(
             [python, "-I", "-m", "pip", "--isolated", "check"],
             environment=environment,
             timeout=60,
             label="Checking candidate dependencies",
+        )
+        self.status(
+            request,
+            "installing",
+            "Dependency checks passed; preparing the panel restart.",
+            progress=60,
         )
         # The permanent venv must be readable by the unprivileged service even
         # though the unit launching this helper has UMask=0077.
@@ -1312,6 +1332,7 @@ class Updater:
             "installing",
             "Building a fresh panel environment; the current panel is still running.",
             candidate_ready=True,
+            progress=5,
         )
         attempt = request["job_id"] + "-" + uuid.uuid4().hex
         venv, managed = self.prepare(request, attempt)
@@ -1334,12 +1355,20 @@ class Updater:
                 "installing",
                 "Candidate built. Backing up and restarting the companion panel.",
                 candidate_ready=True,
+                progress=60,
             )
             self.save_transaction(transaction, "stopping")
             self.ensure_stopped()
             settings = self.backup_data(backup)
             transaction["data_ready"] = True
             self.save_transaction(transaction, "backed_up")
+            self.status(
+                request,
+                "installing",
+                "Panel data backed up; activating the new panel environment.",
+                candidate_ready=True,
+                progress=75,
+            )
             self.save_transaction(transaction, "activating")
             for key, data in managed.items():
                 self.files.write(self.paths.destination(key), data, MANAGED[key][3])
@@ -1350,6 +1379,13 @@ class Updater:
             )
             self.systemctl("daemon-reload")
             self.systemctl("start", PANEL_UNIT)
+            self.status(
+                request,
+                "installing",
+                "New panel started; verifying its health and installed revision.",
+                candidate_ready=True,
+                progress=90,
+            )
             self.wait_health(settings, identity(request))
             # This is the commit point. An interrupted final status write must
             # not roll back a panel that has already passed health verification.
@@ -1385,6 +1421,7 @@ class Updater:
             "succeeded",
             "Panel update installed and health verified.",
             candidate_ready=False,
+            progress=100,
         )
         self.files.remove(self.paths.state / "ready.json")
         self.files.remove(self.paths.state / "transaction.json")
