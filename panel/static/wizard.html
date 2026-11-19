@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -247,6 +247,8 @@
       main.container > article { overflow-x: auto; }
     }
   </style>
+  <link rel="stylesheet" href="/static/modern.css?v=5">
+  <script defer src="/static/theme.js?v=3"></script>
 </head>
 <body>
   <main class="container" x-data="appWizard()" x-cloak>
@@ -259,6 +261,10 @@
     <nav class="container-fluid">
       <ul><li><strong>Psiphon-3X-UI</strong> — First-run Setup Wizard</li></ul>
       <ul class="panel-header-actions">
+        <li><button type="button" class="theme-toggle" data-theme-toggle aria-label="Switch to dark theme" title="Switch to dark theme">
+          <svg class="theme-icon theme-icon--moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.2 15.7A8.3 8.3 0 0 1 8.3 3.8 8.5 8.5 0 1 0 20.2 15.7Z"/></svg>
+          <svg class="theme-icon theme-icon--sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg>
+        </button></li>
         <li><button class="logout-btn" @click.prevent="logout()">Logout</button></li>
       </ul>
     </nav>
@@ -281,17 +287,17 @@
         <span><strong>Warning:</strong> Enabling every 7 countries requires 1 CPU core and
           150 MB of RAM, so only enable the required countries to prevent server instability.</span>
       </div>
-      <p>Choose which countries the panel should expose egress for. You can enable all or hand-pick a subset.</p>
+      <p>Choose the countries to expose.</p>
       <fieldset :disabled="busy">
         <label>
           <input type="radio" name="countryMode" value="all"
                  x-model="form.countries.mode" @change="onCountryModeChange()">
-          Enable every available country
+          All countries
         </label>
         <label>
           <input type="radio" name="countryMode" value="specific"
                  x-model="form.countries.mode" @change="onCountryModeChange()">
-          Choose a specific subset of countries
+          Choose countries
         </label>
       </fieldset>
 
@@ -315,8 +321,7 @@
     <!-- ─────────────────────────  Step: ports  ───────────────────── -->
     <article x-show="state.current_step === 'ports'">
       <h3 x-text="titleFor('ports')"></h3>
-      <p>The wizard writes one Psiphon SOCKS5 listener per country (internal)
-         and clones one 3x-ui inbound per country (public).</p>
+      <p>Assign internal SOCKS and public 3x-ui ports.</p>
 
       <fieldset :disabled="busy">
         <label>
@@ -368,8 +373,7 @@
     <!-- ─────────────────────────  Step: apply (SSE)  ─────────────── -->
     <article x-show="state.current_step === 'apply'">
       <h3 x-text="titleFor('apply')"></h3>
-      <p>Spawning one per-country Psiphon tunnel systemd unit and SOCKS5-probing each.
-         Stay on this page until the stream ends — closing the tab aborts.</p>
+      <p>Start the tunnels and wait for health checks.</p>
       <button @click.prevent="runApply()" :disabled="busy"
               x-text="busy ? 'Applying…' : 'Start apply (stream)'"></button>
       <div class="progress-bar" x-show="busy"><span :style="`width: ${apply.progress}%`"></span></div>
@@ -383,8 +387,7 @@
     <!-- ─────────────────────────  Step: xui_detect  ──────────────── -->
     <article x-show="state.current_step === 'xui_detect'">
       <h3 x-text="titleFor('xui_detect')"></h3>
-      <p>The panel can probe the local host for an already-running 3x-ui installation.
-         If detection finds nothing you can still type the base URL manually in the next step.</p>
+      <p>Check this host for 3x-ui.</p>
       <button @click.prevent="runXuiDetect()" :disabled="busy"
               x-text="busy ? 'Probing…' : 'Detect 3x-ui'"></button>
 
@@ -397,12 +400,11 @@
     <!-- ─────────────────────────  Step: xui_creds  ───────────────── -->
     <article x-show="state.current_step === 'xui_creds'">
       <h3 x-text="titleFor('xui_creds')"></h3>
-      <p>Enter the credentials the panel should use to log into 3x-ui.
-         The cached session is reused for the clone step.</p>
+      <p>Connect the panel to 3x-ui.</p>
       <fieldset :disabled="busy">
         <label>Base URL
           <input type="text" x-model="form.xui_creds.base_url"
-                 placeholder="http://127.0.0.1:2053/panel/  (paste the FULL 3x-ui URL visible in your browser address bar, e.g. /panel/ for a default install or /<secret>/panel for a hardened one. A trailing /panel SPA route is stripped automatically.)">
+                 placeholder="http://127.0.0.1:2053/panel/">
         </label>
         <label>Username
           <input type="text" x-model="form.xui_creds.username" placeholder="admin">
@@ -418,7 +420,7 @@
     <!-- ─────────────────────────  Step: template  ───────────────── -->
     <article x-show="state.current_step === 'template'">
       <h3 x-text="titleFor('template')"></h3>
-      <p>Pick the existing 3x-ui inbound the panel should clone for every country.</p>
+      <p>Choose the inbound to clone.</p>
       <button @click.prevent="loadInbounds()" :disabled="busy"
               x-text="busy ? 'Loading…' : 'Refresh inbound list'"></button>
 
@@ -448,8 +450,7 @@
     <!-- ─────────────────────────  Step: clone (SSE)  ────────────── -->
     <article x-show="state.current_step === 'clone'">
       <h3 x-text="titleFor('clone')"></h3>
-      <p>Cloning the template inbound once per country via the 3x-ui API.
-         Stay on this page until the stream ends — closing the tab aborts.</p>
+      <p>Create one inbound per country.</p>
       <button @click.prevent="runClone()" :disabled="busy"
               x-text="busy ? 'Cloning…' : 'Start clone (stream)'"></button>
       <div class="progress-bar" x-show="busy"><span :style="`width: ${clone.progress}%`"></span></div>
@@ -463,10 +464,7 @@
     <!-- ─────────────────────────  Step: done  ───────────────────── -->
     <article x-show="state.current_step === 'done' || state.is_completed">
       <h3 x-text="titleFor('done')"></h3>
-      <p>The setup wizard has completed. Your per-country tunnels are running and
-         3x-ui has a cloned inbound per country. Continue to the dashboard to
-         enable/disable countries, edit ports, view logs, backup/restore,
-         rotate the admin password and change the panel's port.</p>
+      <p>Setup is complete. Manage your tunnels from the dashboard.</p>
       <button @click.prevent="goToDashboard()">Open the Management Dashboard →</button>
     </article>
 
@@ -488,7 +486,7 @@
       <a class="version-badge" href="https://github.com/DonMonro/psiphon-3x-ui" target="_blank" rel="noopener">
         <!-- GitHub mark (official octocat path, simplified) -->
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
-        <span>v1.1.2</span>
+        <span>v1.2.0</span>
       </a>
       <button type="button" class="panel-update-btn" data-update-trigger
               aria-controls="update-notification" aria-expanded="false">Check for Updates</button>
