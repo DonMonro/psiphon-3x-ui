@@ -90,8 +90,11 @@ button.panel-update-btn[disabled] { opacity: 1; }
   flex-direction: column;
   align-items: stretch;
   gap: .8rem;
-  width: min(24rem, calc(100vw - 2rem));
-  max-height: calc(100dvh - 2rem);
+  box-sizing: border-box;
+  width: min(24rem, calc(100% - max(1rem, env(safe-area-inset-left))
+                             - max(1rem, env(safe-area-inset-right))));
+  max-height: calc(100dvh - max(1rem, env(safe-area-inset-top))
+                          - max(1rem, env(safe-area-inset-bottom)));
   margin: 0;
   padding: .95rem 1.15rem;
   border: 1px solid var(--updates-border);
@@ -139,8 +142,10 @@ dialog.updates-dialog {
   z-index: 11;
   box-sizing: border-box;
   width: min(416px, calc(100vw - 32px));
+  min-width: 0;
   max-width: calc(100vw - 32px);
   height: auto;
+  min-height: 0;
   max-height: min(36rem, calc(100dvh - 8rem));
   margin: 0;
   padding: 0;
@@ -152,7 +157,7 @@ dialog.updates-dialog {
   box-shadow: 0 24px 64px rgba(0,0,0,.6);
 }
 /* The confirmation is a non-modal pop-up anchored above the fixed update
-   controls. It keeps the page usable while the helper builds/restarts. */
+   controls. Reset Pico's full-viewport minimum sizes to keep it compact. */
 .updates-dialog[open] { display: block; }
 .updates-dialog::backdrop { background: transparent; }
 .updates-dialog > article {

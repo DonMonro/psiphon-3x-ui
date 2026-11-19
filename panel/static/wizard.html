@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
   <!-- Inter (variable) — same jsDelivr CDN family as Pico/Alpine for cache locality -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/inter@5/index.css">
-  <link rel="stylesheet" href="/static/updates.css?v=4">
+  <link rel="stylesheet" href="/static/updates.css?v=5">
   <style>
     /* ── Night-Ops theme — design tokens ───────────────────────── */
     :root {
@@ -247,7 +247,7 @@
       main.container > article { overflow-x: auto; }
     }
   </style>
-  <link rel="stylesheet" href="/static/modern.css?v=5">
+  <link rel="stylesheet" href="/static/modern.css?v=6">
   <script defer src="/static/theme.js?v=3"></script>
 </head>
 <body>
@@ -490,8 +490,9 @@
       </a>
       <button type="button" class="panel-update-btn" data-update-trigger
               aria-controls="update-notification" aria-expanded="false">Check for Updates</button>
-      <div data-panel-updates></div>
     </div>
+    <!-- Keep fixed overlays outside the controls' backdrop filter so they use the viewport. -->
+    <div data-panel-updates></div>
   </main>
 
   <!-- Alpine.js pulls the same minimal build used by the dashboard/login SPAs -->

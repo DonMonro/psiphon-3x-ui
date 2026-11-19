@@ -118,19 +118,19 @@ def test_panel_status_light_tracks_country_health(run_js):
 def test_theme_toggle_is_available_and_persisted_on_all_pages():
     for page_name in ("dashboard.html", "wizard.html", "login.html"):
         page = (STATIC / page_name).read_text(encoding="utf-8")
-        assert 'data-theme-toggle' in page
-        assert 'theme.js?v=3' in page
-        assert 'theme-icon--moon' in page
-        assert 'theme-icon--sun' in page
-        assert re.search(r'<button[^>]*data-theme-toggle', page)
+        assert "data-theme-toggle" in page
+        assert "theme.js?v=3" in page
+        assert "theme-icon--moon" in page
+        assert "theme-icon--sun" in page
+        assert re.search(r"<button[^>]*data-theme-toggle", page)
         assert 'type="checkbox" data-theme-toggle' not in page
 
     dashboard = DASHBOARD.read_text(encoding="utf-8")
     assert 'class="theme-option"' not in dashboard
 
     theme = (STATIC / "assets" / "theme.js").read_text(encoding="utf-8")
-    assert 'localStorage.setItem(key, selected)' in theme
-    assert 'root.dataset.theme = selected' in theme
+    assert "localStorage.setItem(key, selected)" in theme
+    assert "root.dataset.theme = selected" in theme
     assert 'document.addEventListener("click"' in theme
 
 
@@ -166,7 +166,7 @@ def test_dashboard_live_usage_is_above_the_version_badge():
     assert controls
     assert controls.group(1).index("resource-inline") < controls.group(1).index("version-badge")
     assert controls.group(1).index("version-badge") < controls.group(1).index("data-update-trigger")
-    assert controls.group(1).index('>RAM<') < controls.group(1).index('>CPU<')
+    assert controls.group(1).index(">RAM<") < controls.group(1).index(">CPU<")
 
     styles = (STATIC / "assets" / "modern.css").read_text(encoding="utf-8")
     footer = _css_block(styles, ".panel-version-controls")

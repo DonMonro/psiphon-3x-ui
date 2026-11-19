@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
   <!-- Inter (variable) — same jsDelivr CDN family as Pico/Alpine for cache locality -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/inter@5/index.css">
-  <link rel="stylesheet" href="/static/updates.css?v=4">
+  <link rel="stylesheet" href="/static/updates.css?v=5">
   <style>
     /* ── Night-Ops theme — design tokens ───────────────────────── */
     :root {
@@ -45,10 +45,6 @@
     /* Slightly reduce the overall scale — Pico is rem-based, so lowering the
        root font-size scales every component proportionally. */
     html { font-size: 16.5px; }
-
-    /* Full-bleed layout: override Pico's centered .container max-width so the
-       dashboard uses the entire viewport with only a hair of breathing room. */
-    main.container { max-width: none; width: 100%; padding-inline: 1rem; }
 
     body {
       background: linear-gradient(180deg, var(--no-bg) 0%, var(--no-bg-2) 100%);
@@ -389,11 +385,11 @@
       .card > article { padding: .9rem 1rem; }
     }
   </style>
-  <link rel="stylesheet" href="/static/modern.css?v=5">
+  <link rel="stylesheet" href="/static/modern.css?v=6">
   <script defer src="/static/theme.js?v=3"></script>
 </head>
 <body>
-  <main class="container" x-data="appDashboard()">
+  <main class="container dashboard-shell" x-data="appDashboard()">
     <!-- Hotfix #10 (Bug #1 / logout 8th time): the <nav> previously lived
          OUTSIDE the <main x-data="appDashboard()"> root. Alpine's
          @click.prevent (and every other Alpine directive) is only bound for
@@ -798,8 +794,9 @@
       </a>
       <button type="button" class="panel-update-btn" data-update-trigger
               aria-controls="update-notification" aria-expanded="false">Check for Updates</button>
-      <div data-panel-updates></div>
     </div>
+    <!-- Keep fixed overlays outside the controls' backdrop filter so they use the viewport. -->
+    <div data-panel-updates></div>
   </main>
 
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>

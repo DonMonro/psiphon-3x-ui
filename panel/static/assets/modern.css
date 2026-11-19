@@ -98,6 +98,7 @@ html[data-theme="light"] .theme-icon--moon, html[data-theme="dark"] .theme-icon-
 .theme-toggle--login { position: fixed; z-index: 9; top: max(1.25rem, env(safe-area-inset-top)); right: max(1.25rem, env(safe-area-inset-right)); box-shadow: 0 6px 18px rgba(23,44,78,.07); }
 
 /* Dashboard navigation, overview cards, metrics, and country management. */
+main.dashboard-shell { width: auto; max-width: none; padding-inline: clamp(1rem, 2vw, 2.8rem); }
 .layout { display: flex; gap: clamp(1rem, 2vw, 1.6rem); align-items: flex-start; }
 .sidebar { flex: 0 0 220px; position: sticky; top: 1.25rem; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
 .sidebar::before { content: "WORKSPACE"; display: block; margin: .25rem .8rem .7rem; color: #96a2b4; font-size: .67rem; font-weight: 800; letter-spacing: .13em; }
@@ -235,6 +236,10 @@ dialog.updates-dialog { border-color: #dce4ef; background: #fff; box-shadow: 0 2
 .updates-dialog h2, .updates-dialog strong { color: #263951; }
 .updates-dialog p { color: #6c7a90; }
 
+@media (min-width: 901px) and (max-height: 31rem) {
+  /* Keep the floating controls clear of the sidebar in short desktop windows. */
+  .dashboard-shell > .panel-version-controls { left: auto; right: max(1rem, env(safe-area-inset-right)); }
+}
 @media (max-width: 1000px) {
   .sidebar { flex-basis: 185px; }
   body:has(.login-card) main.container { gap: 2rem; }
@@ -359,6 +364,7 @@ html[data-theme="dark"] .login-card input { background: #111d30; border-color: #
 html[data-theme="dark"] label, html[data-theme="dark"] .login-card label { color: #d0dced; }
 html[data-theme="dark"] .card > article, html[data-theme="dark"] .row-editor article { border-color: #2b3d57; background: #18263b; }
 html[data-theme="dark"] .card > article > header strong, html[data-theme="dark"] .row-editor article > header strong { color: #edf3fd; }
+html[data-theme="dark"] .logs-article > fieldset { background: var(--no-surface); border-color: var(--no-hairline); }
 html[data-theme="dark"] .stepper li { border-color: #2b3b53; background: #18263b; color: #a2b0c5; }
 html[data-theme="dark"] .stepper li.done { background: #17332f; border-color: #275b4e; color: #8bd4b4; }
 html[data-theme="dark"] .country-grid label { border-color: #2b3b53; background: #18263b; color: #d5dfed; }
