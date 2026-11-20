@@ -360,7 +360,7 @@ class TestHttpsSettings:
 
         # Use a plain Response so we don't need a real route.
         response = Response()
-        a.set_session_cookie(response, "admin")
+        a.set_session_cookie(response, "admin", generation="a" * 64)
         set_cookie = response.headers.get("set-cookie", "")
         assert "Secure" in set_cookie
 
@@ -371,7 +371,7 @@ class TestHttpsSettings:
         from fastapi import Response
 
         response = Response()
-        a.set_session_cookie(response, "admin")
+        a.set_session_cookie(response, "admin", generation="a" * 64)
         set_cookie = response.headers.get("set-cookie", "")
         assert "Secure" not in set_cookie
 
@@ -783,13 +783,13 @@ class TestPackagingRegressions:
         """``pyproject.toml``'s ``[project]`` ``version`` controls the wheel
         filename. After bumping ``app.version`` we MUST bump it here too or
         the installer advertises the old project version even though the
-        FastAPI app reports the new one. Lock in 1.1.2 — bump this when
+        FastAPI app reports the new one. Lock in 1.2.0 — bump this when
         cutting a new release.
         """
         pyproject = _load_pyproject()
-        assert pyproject["project"]["version"] == "1.1.2", (
+        assert pyproject["project"]["version"] == "1.2.0", (
             "pyproject.toml [project].version must be bumped to match panel.main's "
-            f"app.version. Got {pyproject['project']['version']!r}, expected '1.1.2'."
+            f"app.version. Got {pyproject['project']['version']!r}, expected '1.2.0'."
         )
 
     def test_runtime_versions_match_package_version(self):

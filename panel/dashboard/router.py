@@ -30,22 +30,35 @@ import io
 import json
 import logging
 import re
+import sqlite3
 import subprocess
 import tarfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, StrictInt, field_validator
+from sqlalchemy import create_engine, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from .. import runtime, tls_reload
-from ..auth import decrypt_creds, get_current_user, hash_password, verify_password
+from ..auth import (
+    decrypt_creds,
+    get_current_user,
+    hash_password,
+    revoke_admin_sessions,
+    verify_password,
+)
 from ..config import get_settings
 from ..db import get_db
 from ..models import (
+    AdminAuthState,
     CloneRecord,
     Country,
     PortAssignment,
@@ -77,6 +90,7 @@ from .xray_routing import apply_country_binding, remove_country_binding
 from .xui_client import XuiClient, XuiClientError
 
 _log = logging.getLogger(__name__)
+_RESTORE_TIMEOUT_SECONDS = 5.0
 
 router = APIRouter()
 
@@ -297,6 +311,67 @@ def _config_dir() -> Path:
 def _panel_db_path() -> Path:
     """Return the on-disk path to ``panel.db``."""
     return Path(get_settings().db_path)
+
+
+def _restore_panel_db(data: bytes, target: Path, db: Session) -> None:
+    """Restore a validated database with a fresh session generation.
+
+    Rotate in the private candidate before the SQLite backup transaction
+    replaces the live data, so an old cookie never becomes valid in between.
+    This also accepts backups made before the auth-state table existed.
+    """
+    with TemporaryDirectory(prefix="panel-restore-") as directory:
+        candidate = Path(directory) / "panel.db"
+        candidate.write_bytes(data)
+        engine = create_engine(f"sqlite:///{candidate}")
+        try:
+            with Session(engine) as staged:
+                staged.execute(text("PRAGMA trusted_schema=OFF"))
+                if staged.execute(text("PRAGMA quick_check")).scalar() != "ok":
+                    raise ValueError("invalid database")
+                if staged.get(Settings, 1) is None:
+                    raise ValueError("missing panel settings")
+                # Recreate this small auth table to discard any restored nonce
+                # and its triggers before issuing the replacement generation.
+                AdminAuthState.__table__.drop(staged.connection(), checkfirst=True)
+                AdminAuthState.__table__.create(staged.connection())
+                revoke_admin_sessions(staged)
+                staged.commit()
+        except (SQLAlchemyError, ValueError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="backup contains an invalid panel.db",
+            ) from exc
+        finally:
+            engine.dispose()
+
+        # Release this request's read transaction before taking the restore
+        # write lock. The backup API keeps the destination inode and atomically
+        # replaces database contents, including WAL-mode installations.
+        db.close()
+        deadline = time.monotonic() + _RESTORE_TIMEOUT_SECONDS
+
+        def progress(_status, _remaining, _total):
+            if _status != sqlite3.SQLITE_DONE and time.monotonic() >= deadline:
+                raise TimeoutError("database restore timed out")
+
+        try:
+            with (
+                contextlib.closing(sqlite3.connect(candidate)) as source,
+                contextlib.closing(
+                    sqlite3.connect(
+                        target.resolve().as_uri() + "?mode=rw",
+                        uri=True,
+                        timeout=_RESTORE_TIMEOUT_SECONDS,
+                    )
+                ) as destination,
+            ):
+                source.backup(destination, pages=256, progress=progress, sleep=0.05)
+        except (sqlite3.Error, TimeoutError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="panel database could not be restored; wait for other operations and retry",
+            ) from exc
 
 
 def _validate_port(value: int, *, name: str) -> int:
@@ -1959,9 +2034,9 @@ async def restore(
 ) -> dict[str, Any]:
     """Replace ``panel.db`` + ``config/*.json`` from a tarball.
 
-    The tarball must have been produced by ``POST /api/dashboard/backup``
-    (entries are read in-memory, validated by extension, then atomically
-    copied to disk).
+    The tarball must have been produced by ``POST /api/dashboard/backup``.
+    Restoring a database revokes browser sessions, including the caller's,
+    so neither a backup nor a restore can bring back a recovered session.
     """
     _require_wizard_completed(db)
 
@@ -1995,8 +2070,7 @@ async def restore(
                 data = f.read()
                 if name == "panel.db" or name.endswith("/panel.db"):
                     target = _panel_db_path()
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_bytes(data)
+                    await run_in_threadpool(_restore_panel_db, data, target, db)
                     summary["restored_panel_db"] = True
                 elif name.startswith("config/") or "/config/" in name:
                     base = Path(name).name

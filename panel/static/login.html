@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -115,6 +115,61 @@
     .login-card button:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--no-accent-soft); }
     .login-card button[disabled] { opacity: .55; pointer-events: none; }
 
+    .login-card .recovery-trigger {
+      width: auto; height: auto; display: block; margin: .9rem auto 0; padding: .3rem;
+      border: 0; background: transparent; color: var(--no-accent-hi);
+      font-size: .85rem; font-weight: 600; letter-spacing: 0;
+    }
+    .login-card .recovery-trigger:hover:not([disabled]) {
+      background: transparent; box-shadow: none; text-decoration: underline; transform: none;
+    }
+    dialog.login-recovery-dialog {
+      inset: 0; width: min(38rem, calc(100vw - 2rem)); min-width: 0;
+      height: fit-content; min-height: 0; max-height: calc(100dvh - 2rem);
+      margin: auto; padding: 0; overflow-y: auto; border: 1px solid var(--no-hairline-2);
+      border-radius: var(--no-radius-card); background: var(--no-surface); color: var(--no-text);
+      box-shadow: 0 24px 70px rgba(0,0,0,.25);
+    }
+    dialog.login-recovery-dialog[open] { display: block; }
+    .login-recovery-dialog::backdrop { background: rgba(18,32,54,.48); backdrop-filter: blur(5px); }
+    .login-recovery-dialog > article {
+      margin: 0; padding: 1.5rem; border: 0; border-radius: 0;
+      background: var(--no-surface); color: var(--no-text); box-shadow: none;
+    }
+    .recovery-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
+    .recovery-heading h2 { margin: 0; color: var(--no-text); font-size: 1.3rem; }
+    .login-recovery-dialog .recovery-close {
+      flex: none; width: 2rem; height: 2rem; margin: 0; padding: 0;
+      border: 1px solid var(--no-hairline); background: var(--no-input);
+      color: var(--no-text-2); font-size: 1.3rem; line-height: 1;
+    }
+    .login-recovery-dialog p { margin-bottom: .8rem; color: var(--no-text-2); font-size: .875rem; line-height: 1.6; }
+    .login-recovery-dialog strong { color: var(--no-text); }
+    .login-recovery-dialog code { background: var(--no-input); color: var(--no-text); }
+    .login-recovery-dialog .recovery-note { font-size: .8rem; }
+    .recovery-command-list { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--no-hairline); }
+    .recovery-command-list h3 { margin: 0 0 .4rem; color: var(--no-text); font-size: .95rem; }
+    .recovery-command { margin-top: .9rem; }
+    .recovery-command h4 { margin: 0 0 .4rem; color: var(--no-text); font-size: .8rem; font-weight: 600; }
+    .recovery-command-row { display: flex; align-items: flex-start; gap: .5rem; }
+    .recovery-command-row code {
+      display: block; flex: 1; min-width: 0; padding: .65rem .75rem;
+      border: 1px solid var(--no-hairline); border-radius: var(--no-radius-ctl);
+      font-size: .75rem; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; user-select: all;
+    }
+    .login-recovery-dialog .recovery-copy {
+      flex: none; width: auto; margin: 0; padding: .65rem .7rem;
+      border: 1px solid var(--no-hairline); background: var(--no-input);
+      color: var(--no-accent-hi); font-size: .75rem; line-height: 1.6;
+    }
+    .login-recovery-dialog .recovery-feedback { min-height: 1.3em; margin: .5rem 0 0; font-size: .8rem; }
+    html:has(.login-recovery-dialog[open]) { overflow: hidden; }
+    @media (max-width: 480px) {
+      .login-recovery-dialog > article { padding: 1.1rem; }
+      .recovery-command-row { flex-wrap: wrap; }
+      .recovery-command-row code { flex-basis: calc(100% - 4.5rem); }
+    }
+
     .toast {
       position: fixed;
       top: max(1rem, env(safe-area-inset-top));
@@ -156,15 +211,27 @@
     .version-badge:hover { color: var(--no-text); border-color: var(--no-hairline-2); }
     .version-badge svg { width: 14px; height: 14px; fill: currentColor; flex: none; }
   </style>
+  <link rel="stylesheet" href="/static/modern.css?v=7">
+  <script defer src="/static/theme.js?v=3"></script>
 </head>
 <body>
   <main class="container" x-data="appLogin()" x-init="probeSession()" x-cloak>
+    <section class="login-visual" aria-label="Psiphon 3X UI overview">
+      <div class="login-brand">
+        <span class="login-brand-mark">P</span>
+        <span class="login-brand-copy"><strong>Psiphon-3X-UI</strong><small>NETWORK CONTROL PLANE</small></span>
+      </div>
+      <div class="login-intro">
+        <p class="eyebrow">Secure egress, clearly managed</p>
+        <h2>Every tunnel, one calm view.</h2>
+      </div>
+    </section>
     <article class="login-card">
       <div class="branding">
         <span class="badge">Psiphon-3X-UI</span>
       </div>
       <h1>Sign in</h1>
-      <p class="sub">Enter the admin credentials printed at the end of the installer.</p>
+      <p class="sub">Use the admin credentials from install.</p>
 
       <!-- Inline error / status banner -->
       <template x-if="toast.text">
@@ -195,14 +262,68 @@
           <span x-show="busy">Signing in…</span>
         </button>
       </form>
+      <button type="button" class="recovery-trigger" x-ref="recoveryTrigger"
+              @click="openRecovery()" aria-haspopup="dialog"
+              aria-controls="login-recovery" :aria-expanded="recoveryOpen">Can’t sign in?</button>
     </article>
+
+    <dialog id="login-recovery" class="login-recovery-dialog" x-ref="recoveryDialog"
+            aria-labelledby="recovery-title" aria-describedby="recovery-help"
+            @click="closeRecoveryBackdrop($event)" @close="onRecoveryClosed()">
+      <article>
+        <div class="recovery-heading">
+          <h2 id="recovery-title">Recover panel access</h2>
+          <button type="button" class="recovery-close" @click="closeRecovery()"
+                  aria-label="Close recovery help" autofocus><span aria-hidden="true">×</span></button>
+        </div>
+        <p id="recovery-help">Connect to the <strong>Linux server hosting this panel</strong> over SSH
+          or through your hosting provider’s console. Run the appropriate command below with
+          <strong>sudo or root access</strong>. If someone else manages the server, ask them to help.</p>
+        <p>Enter the new password privately in the terminal, then return here to sign in.
+          A password reset signs out existing panel sessions.</p>
+        <p class="recovery-note">If a command is not found, ask the server administrator to run the current installer once.</p>
+        <div class="recovery-command-list" aria-label="Server recovery commands">
+          <h3>Run on your server</h3>
+          <p class="recovery-note">For the last command, replace <code>new-admin</code> with your desired username.</p>
+          <p class="recovery-feedback" role="status" aria-live="polite" x-text="recoveryMessage"></p>
+          <div class="recovery-command">
+            <h4>Forgot your username?</h4>
+            <div class="recovery-command-row">
+              <code x-ref="usernameCommand">sudo psiphon-3x-ui-admin show-username</code>
+              <button type="button" class="recovery-copy"
+                      @click="copyRecoveryCommand($refs.usernameCommand)" aria-label="Copy username lookup command">Copy</button>
+            </div>
+          </div>
+          <div class="recovery-command">
+            <h4>Forgot your password?</h4>
+            <div class="recovery-command-row">
+              <code x-ref="passwordCommand">sudo psiphon-3x-ui-admin reset-password</code>
+              <button type="button" class="recovery-copy"
+                      @click="copyRecoveryCommand($refs.passwordCommand)" aria-label="Copy password reset command">Copy</button>
+            </div>
+          </div>
+          <div class="recovery-command">
+            <h4>Forgot both?</h4>
+            <div class="recovery-command-row">
+              <code x-ref="credentialsCommand">sudo psiphon-3x-ui-admin reset-password --username new-admin</code>
+              <button type="button" class="recovery-copy"
+                      @click="copyRecoveryCommand($refs.credentialsCommand)" aria-label="Copy username and password reset command">Copy</button>
+            </div>
+          </div>
+        </div>
+      </article>
+    </dialog>
   </main>
 
   <!-- Version badge — bottom-left on every screen (also in wizard/dashboard) -->
+  <button type="button" class="theme-toggle theme-toggle--login" data-theme-toggle aria-label="Switch to dark theme" title="Switch to dark theme">
+    <svg class="theme-icon theme-icon--moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.2 15.7A8.3 8.3 0 0 1 8.3 3.8 8.5 8.5 0 1 0 20.2 15.7Z"/></svg>
+    <svg class="theme-icon theme-icon--sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg>
+  </button>
   <a class="version-badge" href="https://github.com/DonMonro/psiphon-3x-ui" target="_blank" rel="noopener">
     <!-- GitHub mark (official octocat path, simplified) -->
     <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
-    <span>v1.1.2</span>
+    <span>v1.2.0</span>
   </a>
 
   <!-- Alpine.js (same CDN as the management dashboard for cache reuse) -->
@@ -213,6 +334,51 @@
         form: { user: "", password: "", reveal: false },
         busy: false,
         toast: { text: "", kind: "err" },
+        recoveryOpen: false,
+        recoveryMessage: "",
+
+        openRecovery() {
+          this.recoveryMessage = "";
+          this.$refs.recoveryDialog.showModal();
+          this.recoveryOpen = true;
+        },
+
+        closeRecovery() {
+          this.$refs.recoveryDialog.close();
+        },
+
+        onRecoveryClosed() {
+          this.recoveryOpen = false;
+          this.$refs.recoveryTrigger.focus();
+        },
+
+        closeRecoveryBackdrop(event) {
+          if (event.target !== this.$refs.recoveryDialog) return;
+          const bounds = event.target.getBoundingClientRect();
+          if (event.clientX < bounds.left || event.clientX > bounds.right ||
+              event.clientY < bounds.top || event.clientY > bounds.bottom) this.closeRecovery();
+        },
+
+        async copyRecoveryCommand(element) {
+          const command = element.textContent.trim();
+          try {
+            await navigator.clipboard.writeText(command);
+            this.recoveryMessage = "Command copied. Run it on your server.";
+            return;
+          } catch (_) { /* HTTP panels may not have access to the Clipboard API. */ }
+          try {
+            const selection = window.getSelection();
+            const range = document.createRange();
+            range.selectNodeContents(element);
+            selection.removeAllRanges();
+            selection.addRange(range);
+            if (document.execCommand("copy")) {
+              this.recoveryMessage = "Command copied. Run it on your server.";
+              return;
+            }
+          } catch (_) { /* Leave the visible command available for manual copying. */ }
+          this.recoveryMessage = "Select the command and copy it to your server terminal.";
+        },
 
         /** If a valid session cookie is already present, jump straight to the
           * app the operator belongs on: ``/wizard`` before the first-run

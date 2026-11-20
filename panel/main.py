@@ -31,6 +31,7 @@ from .auth import (
     clear_session_cookie,
     csrf_tokens_match,
     get_current_user,
+    get_session_generation,
     login_rate_limit_hit,
     login_rate_limit_reset,
     set_csrf_cookie,
@@ -157,12 +158,21 @@ def login(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="too many login attempts — wait and try again.",
         )
+    # Capture the generation before reading/verifying credentials. A concurrent
+    # recovery can then only produce an already-revoked cookie, never a fresh
+    # generation authenticated with the previous password.
+    generation = get_session_generation(db)
     settings = db.get(Settings, {"id": 1})
     if settings is None:
         # Installer hasn't seeded panel.db yet — no one can log in.
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="panel not initialised — run the installer or panel.seed first.",
+        )
+    if not generation:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="panel authentication not initialised — restart the panel.",
         )
     if settings.admin_user != body.user or not verify_password(
         body.password, settings.admin_pass_hash
@@ -176,7 +186,7 @@ def login(
     # Successful login clears the rate-limit bucket for this IP so a typo
     # followed by a correct password doesn't lock the admin out for a minute.
     login_rate_limit_reset(client_ip)
-    set_session_cookie(response, settings.admin_user)
+    set_session_cookie(response, settings.admin_user, generation=generation)
     set_csrf_cookie(response)
     response.status_code = status.HTTP_204_NO_CONTENT
     return response

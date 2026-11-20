@@ -108,7 +108,7 @@ def _validate(port: int, user: str, password: str) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     _ensure_panel_path()
     # Import after path munging so a dev checkout's `panel/` doesn't shadow.
-    from panel.auth import hash_password
+    from panel.auth import hash_password, revoke_admin_sessions
     from panel.config import load_countries  # noqa: F401  (load + seed)
     from panel.db import init_db, make_engine, make_session_factory
     from panel.models import Country, Settings  # noqa: F401  (registers on Base.metadata)
@@ -170,6 +170,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             existing.admin_pass_hash = pass_hash
             existing.wizard_completed = bool(existing.wizard_completed)  # preserve existing
             print("[seed] upserted existing Settings(id=1) row", file=sys.stderr)
+        revoke_admin_sessions(session)
         session.commit()
 
         # Seed the Country table from countries.yaml so the wizard has

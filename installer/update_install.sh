@@ -12,5 +12,5 @@ run_update_install() {
         --group "${PSIPHON3XUI_GROUP}" --source "${SCRIPT_DIR}" \
         --metadata "${metadata}" --lock-fd 9 ) \
         || die "Could not register the privileged panel updater."
-    ok "Privileged staged updater registered."
+    ok "Privileged staged updater and server login recovery command registered."
 }

@@ -183,6 +183,7 @@ class Paths:
     libexec: Path = LIBEXEC
     systemd: Path = SYSTEMD
     polkit: Path = POLKIT
+    sbin: Path = Path("/usr/local/sbin")
 
     @property
     def inbox(self) -> Path:
@@ -1486,14 +1487,29 @@ class Updater:
         # Validate the entire input before replacing installed recovery code.
         marker = identity(self.files.json(metadata), revision_optional=True)
         helper = self.files.read(source / "installer/update_panel.py", MAX_MANAGED)
+        admin_launcher = self.files.read(source / "installer/admin_recovery.py", MAX_MANAGED)
         units = {
             key: self.render(key, self.files.read(source / MANAGED[key][0], MAX_MANAGED))
             for key in ("download_unit", "install_unit", "recover_unit")
         }
-        if not helper or any(not content for content in units.values()):
+        if not helper or not admin_launcher or any(not content for content in units.values()):
             raise UpdateError("Updater bootstrap files must not be empty.")
         self.files.mkdir(self.paths.libexec.parent, 0o755)
         self.files.mkdir(self.paths.libexec, 0o755)
+        if self.paths.sbin.exists():
+            with self.files.directory(self.paths.sbin):
+                pass
+        else:
+            self.files.mkdir(self.paths.sbin, 0o755)
+        # Bootstrap-only: keeping these outside MANAGED preserves rollback
+        # compatibility with previous trusted helpers' strict manifests. The
+        # stable launcher executes the active wheel after dropping privileges.
+        self.files.write(self.paths.sbin / "psiphon-3x-ui-admin", admin_launcher, 0o755)
+        self.files.put_json(
+            self.paths.state / "admin.json",
+            {"prefix": str(self.paths.prefix), "user": self.user, "group": self.group},
+            0o640,
+        )
         self.files.write(self.paths.libexec / "update_panel.py", helper, 0o755)
         self.files.write(self.paths.state / "recovery.py", helper, 0o600)
         for key, content in units.items():

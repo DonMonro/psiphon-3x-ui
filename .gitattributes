@@ -37,6 +37,8 @@ release-artifacts.sha256  text eol=lf
 
 # ── Python source (default text = LF on commit) ─────────────────────────
 *.py               text
+# This Python source is installed as a directly executed Linux command.
+installer/admin_recovery.py text eol=lf
 
 # ── Documentation ───────────────────────────────────────────────────────
 *.md               text eol=lf

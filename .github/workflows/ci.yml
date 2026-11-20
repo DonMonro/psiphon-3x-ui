@@ -36,10 +36,10 @@ jobs:
           pip install -e .
 
       - name: Ruff lint
-        run: ruff check panel tests installer/update_panel.py installer/write_build_metadata.py
+        run: ruff check panel tests installer/update_panel.py installer/write_build_metadata.py installer/admin_recovery.py
 
       - name: Ruff format check
-        run: ruff format --check panel tests installer/update_panel.py installer/write_build_metadata.py
+        run: ruff format --check panel tests installer/update_panel.py installer/write_build_metadata.py installer/admin_recovery.py
 
       - name: Pytest
         env:

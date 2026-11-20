@@ -6,7 +6,7 @@ Phase 3 wires these primitives into the FastAPI surface:
   ``panel.seed`` (hash on first install) and the login endpoint (verify).
 - :func:`sign_session` / :func:`verify_session` — opaque, signed session
   cookie strings (itsdangerous ``URLSafeTimedSerializer``). The payload is
-  ``{"sub": <username>}``.
+  ``{"sub": <username>, "generation": <persisted random generation>}``.
 - :func:`set_session_cookie` / :func:`clear_session_cookie` — Response helpers
   for ``/auth/login`` and ``/auth/logout``.
 - :func:`get_current_user` — FastAPI dependency: reads the ``psiphon3xui_session``
@@ -23,11 +23,16 @@ from collections import deque
 from typing import Annotated
 
 import bcrypt
-from fastapi import Cookie, HTTPException, status
+from fastapi import Cookie, Depends, HTTPException, status
 from fastapi.responses import JSONResponse, Response
-from itsdangerous import BadSignature, URLSafeTimedSerializer
+from itsdangerous import BadData, BadSignature, URLSafeTimedSerializer
+from sqlalchemy import select
+from sqlalchemy.dialects.sqlite import insert
+from sqlalchemy.orm import Session
 
 from .config import get_settings
+from .db import get_db
+from .models import AdminAuthState, Settings
 
 SESSION_COOKIE_NAME = "psiphon3xui_session"
 CSRF_COOKIE_NAME = "psiphon3xui_csrf"
@@ -91,18 +96,48 @@ def sign_session(payload: dict) -> str:
 def verify_session(token: str, max_age: int = SESSION_MAX_AGE_SECONDS) -> dict | None:
     """Return the session payload, or ``None`` if the token is invalid/expired."""
     try:
-        return _signer().loads(token, max_age=max_age)
-    except BadSignature:
+        payload = _signer().loads(token, max_age=max_age)
+        return payload if isinstance(payload, dict) else None
+    except BadData:
         return None
 
 
-def set_session_cookie(response: Response, username: str) -> None:
+def get_session_generation(db: Session) -> str | None:
+    """Read the current generation from storage; never create one implicitly.
+
+    Scalar SQL avoids a cached ORM object hiding a reset by another process.
+    A missing row means the database has not been initialized for sessions.
+    """
+    return db.scalar(
+        select(AdminAuthState.session_generation)
+        .join(Settings, Settings.id == AdminAuthState.id)
+        .where(AdminAuthState.id == 1)
+    )
+
+
+def revoke_admin_sessions(db: Session) -> str:
+    """Replace the admin generation, inside the caller's transaction.
+
+    Credential recovery must commit this together with the new credentials.
+    The shared session/vault secret stays unchanged, preserving stored 3x-ui
+    credentials. This helper neither creates tables nor commits the session.
+    """
+    generation = secrets.token_hex(32)
+    db.execute(
+        insert(AdminAuthState)
+        .values(id=1, session_generation=generation)
+        .on_conflict_do_update(index_elements=["id"], set_={"session_generation": generation})
+    )
+    return generation
+
+
+def set_session_cookie(response: Response, username: str, *, generation: str) -> None:
     """Bake and attach the session cookie to *response*.
 
-    The cookie holds a signed payload of ``{"sub": <username>}`` and expires
-    after :data:`SESSION_MAX_AGE_SECONDS`. Call from the login handler.
+    The cookie includes the persisted admin generation and expires after
+    :data:`SESSION_MAX_AGE_SECONDS`. Call from the login handler.
     """
-    token = sign_session({"sub": username})
+    token = sign_session({"sub": username, "generation": generation})
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
         value=token,
@@ -137,7 +172,8 @@ def clear_session_cookie(response: Response) -> None:
     )
 
 
-async def get_current_user(
+def get_current_user(
+    db: Annotated[Session, Depends(get_db)],
     session: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None,
 ) -> dict:
     """FastAPI dependency: require a valid signed session cookie.
@@ -155,7 +191,22 @@ async def get_current_user(
             detail="not authenticated",
         )
     payload = verify_session(session)
-    if payload is None or "sub" not in payload:
+    if (
+        payload is None
+        or not isinstance(payload.get("sub"), str)
+        or not payload["sub"]
+        or not isinstance(payload.get("generation"), str)
+        or len(payload["generation"]) != 64
+        or not payload["generation"].isascii()
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="not authenticated",
+        )
+    generation = get_session_generation(db)
+    if not generation or not hmac.compare_digest(
+        payload["generation"].encode("utf-8"), generation.encode("utf-8")
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="not authenticated",

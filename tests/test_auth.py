@@ -221,7 +221,7 @@ def _delete_setcookies(monkeypatch, *, https_only: bool):
 
     # 1. Set the cookies exactly as login / GET /auth/csrf do.
     setter = Response()
-    set_session_cookie(setter, username="admin")
+    set_session_cookie(setter, username="admin", generation="a" * 64)
     csrfer = Response()
     set_csrf_cookie(csrfer, token=issue_csrf_token())
 

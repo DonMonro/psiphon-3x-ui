@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
   <!-- Inter (variable) — same jsDelivr CDN family as Pico/Alpine for cache locality -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/inter@5/index.css">
-  <link rel="stylesheet" href="/static/updates.css?v=4">
+  <link rel="stylesheet" href="/static/updates.css?v=5">
   <style>
     /* ── Night-Ops theme — design tokens ───────────────────────── */
     :root {
@@ -45,10 +45,6 @@
     /* Slightly reduce the overall scale — Pico is rem-based, so lowering the
        root font-size scales every component proportionally. */
     html { font-size: 16.5px; }
-
-    /* Full-bleed layout: override Pico's centered .container max-width so the
-       dashboard uses the entire viewport with only a hair of breathing room. */
-    main.container { max-width: none; width: 100%; padding-inline: 1rem; }
 
     body {
       background: linear-gradient(180deg, var(--no-bg) 0%, var(--no-bg-2) 100%);
@@ -364,23 +360,9 @@
     .resource-unavailable { color: var(--no-text-2) !important; }
     .resource-inline { display: flex; align-items: center; gap: .35rem; color: var(--no-text-2); font-size: .68rem; white-space: nowrap; }
     .resource-inline .resource-value { color: var(--resource-color, var(--no-ok)); font-weight: 700; font-variant-numeric: tabular-nums; }
-    .dashboard-columns { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(18rem, .8fr); gap: 1rem; }
-    .dashboard-panel { margin: 0; }
-    .dashboard-panel h4 { margin: 0 0 .8rem; color: var(--no-text); }
-    .dashboard-panel > p { margin-top: -.35rem; font-size: .88rem; }
-    .attention-list { list-style: none; padding: 0; margin: 0; }
-    .attention-list li { display: flex; align-items: flex-start; justify-content: space-between;
-      gap: .8rem; padding: .65rem 0; border-bottom: 1px solid var(--no-hairline); }
-    .attention-list li:last-child { border-bottom: 0; }
-    .attention-country { display: flex; flex-direction: column; gap: .15rem; min-width: 0; }
-    .attention-country strong { color: var(--no-text); }
-    .attention-country small { overflow-wrap: anywhere; }
-    .dashboard-empty { color: var(--no-ok) !important; display: flex; align-items: center; gap: .45rem; }
-    .dashboard-empty::before { content: "✓"; font-weight: 800; }
     @media (max-width: 900px) {
       .dashboard-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .resource-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .dashboard-columns { grid-template-columns: 1fr; }
     }
     @media (max-width: 480px) {
       .dashboard-grid { grid-template-columns: 1fr; }
@@ -403,9 +385,11 @@
       .card > article { padding: .9rem 1rem; }
     }
   </style>
+  <link rel="stylesheet" href="/static/modern.css?v=7">
+  <script defer src="/static/theme.js?v=3"></script>
 </head>
 <body>
-  <main class="container" x-data="appDashboard()">
+  <main class="container dashboard-shell" x-data="appDashboard()">
     <!-- Hotfix #10 (Bug #1 / logout 8th time): the <nav> previously lived
          OUTSIDE the <main x-data="appDashboard()"> root. Alpine's
          @click.prevent (and every other Alpine directive) is only bound for
@@ -415,8 +399,12 @@
          JS the browser never invoked. Moving the <nav> inside <main> is the
          first and only real logout fix. -->
     <nav class="container-fluid">
-      <ul><li><strong>Psiphon-3X-UI</strong> — Management Dashboard</li></ul>
+      <ul><li><strong>Psiphon-3X-UI</strong><span class="panel-status" :class="'panel-status--' + panelStatus.tone" :title="panelStatus.message" :aria-label="panelStatus.message" role="status" tabindex="0"><span class="status-dot" aria-hidden="true"></span><span class="sr-only" x-text="panelStatus.label"></span></span><span class="panel-page-name">Management Dashboard</span></li></ul>
       <ul class="panel-header-actions">
+        <li><button type="button" class="theme-toggle" data-theme-toggle aria-label="Switch to dark theme" title="Switch to dark theme">
+          <svg class="theme-icon theme-icon--moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.2 15.7A8.3 8.3 0 0 1 8.3 3.8 8.5 8.5 0 1 0 20.2 15.7Z"/></svg>
+          <svg class="theme-icon theme-icon--sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg>
+        </button></li>
         <li><button class="logout-btn" @click.prevent="logout()">Logout</button></li>
       </ul>
     </nav>
@@ -443,9 +431,9 @@
     -------------------------------------------------------------------- -->
     <section class="card" x-show="section === 'dashboard'" x-cloak>
       <div class="card-head dashboard-head">
-        <div><h3>Dashboard</h3> <small>Tunnel health and country status</small></div>
+        <div><h3>Overview</h3></div>
         <button class="outline secondary" @click="refreshAll()" :disabled="busy.countries">
-          <span x-text="busy.countries ? 'Refreshing…' : 'Refresh status'"></span>
+          <span x-text="busy.countries ? 'Refreshing…' : 'Refresh'"></span>
         </button>
       </div>
       <div class="resource-grid" aria-label="Live server resource usage">
@@ -468,41 +456,17 @@
         <article class="dashboard-stat" :class="dashboardStats.active === dashboardStats.enabled && dashboardStats.enabled ? 'ok' : 'warn'">
           <small>Active tunnels</small>
           <strong x-text="dashboardStats.active"></strong>
-          <p x-text="dashboardStats.enabled ? `${dashboardStats.active} of ${dashboardStats.enabled} enabled` : 'No tunnels enabled'"></p>
+          <p x-text="dashboardStats.enabled ? dashboardStats.active + '/' + dashboardStats.enabled + ' enabled' : 'None enabled'"></p>
         </article>
         <article class="dashboard-stat" :class="dashboardStats.healthy === dashboardStats.linked && dashboardStats.linked ? 'ok' : 'warn'">
           <small>Healthy inbounds</small>
           <strong x-text="dashboardStats.healthy"></strong>
-          <p x-text="dashboardStats.linked ? `${dashboardStats.healthy} of ${dashboardStats.linked} linked` : 'No linked inbounds'"></p>
+          <p x-text="dashboardStats.linked ? dashboardStats.healthy + '/' + dashboardStats.linked + ' linked' : 'None linked'"></p>
         </article>
         <article class="dashboard-stat" :class="dashboardStats.attention ? 'warn' : 'ok'">
           <small>Needs attention</small>
           <strong x-text="dashboardStats.attention"></strong>
-          <p x-text="dashboardStats.attention ? 'enabled countries to review' : 'All enabled countries look ready'"></p>
-        </article>
-      </div>
-      <div class="dashboard-columns">
-        <article class="dashboard-panel">
-          <h4>Operational status</h4>
-          <p x-show="!countries.length">No country data is available yet.</p>
-          <p x-show="countries.length && !dashboardStats.attention" class="dashboard-empty">All enabled tunnels have an active unit and linked inbound.</p>
-          <ul class="attention-list" x-show="dashboardStats.attention">
-            <template x-for="item in attentionCountries" :key="item.code">
-              <li>
-                <span class="attention-country">
-                  <strong x-text="`${item.flag ? item.flag + ' ' : ''}${item.name} (${item.code})`"></strong>
-                  <small x-text="item.issues.join(' · ')"></small>
-                </span>
-                <button class="outline secondary" @click="section = 'countries'">Review</button>
-              </li>
-            </template>
-          </ul>
-        </article>
-        <article class="dashboard-panel">
-          <h4>What these indicators mean</h4>
-          <p><strong>Active tunnels</strong> checks the live systemd unit for each enabled country.</p>
-          <p><strong>Healthy inbounds</strong> reflects the cached 3x-ui clone health. Use <em>Ping test</em> in Countries to verify egress latency.</p>
-          <button class="outline" @click="section = 'countries'">Open Countries</button>
+          <p x-text="dashboardStats.attention ? 'Review needed' : 'All clear'"></p>
         </article>
       </div>
     </section>
@@ -520,7 +484,7 @@
           </tr>
         </thead>
         <tbody x-show="!countries.length">
-          <tr><td colspan="9"><em>No countries yet — run the wizard's add-country step first.</em></td></tr>
+          <tr><td colspan="9"><em>No countries configured.</em></td></tr>
         </tbody>
         <!-- One <tbody> per country so the editor panels can expand in a row
              DIRECTLY BENEATH the clicked country instead of stacking at the
@@ -710,17 +674,14 @@
       <div class="card-head"><h3>Settings</h3></div>
       <article>
         <header><strong>Re-apply everything</strong></header>
-        <p>Iterate every <code>PortAssignment</code> row and re-write its per-country Psiphon
-           config + restart the templated unit. Unhealthy 3x-ui clones are re-cloned from the
-           wizard's template inbound.</p>
+        <p>Rebuild tunnel configs and repair unhealthy clones.</p>
         <button @click="reapplyAll()" :disabled="busy.reapply"
                 :class="{ busy: busy.reapply }">Re-apply whole panel</button>
         <pre x-show="reapply.result" class="log"><code x-text="JSON.stringify(reapply.result, null, 2)"></code></pre>
       </article>
       <article>
         <header><strong>Backup / Restore</strong></header>
-        <p>Export a tar archive of <code>panel.db</code> + <code>config/*.json</code> or restore from a
-           previously-exported archive.</p>
+        <p>Save or restore panel data.</p>
         <button @click="downloadBackup()" :disabled="busy.backup">Download backup</button>
         <hr>
         <label>Restore from tar archive
@@ -749,8 +710,7 @@
                       x-text="username.reveal ? '🙈' : '👁'"></button>
             </span></label>
         </fieldset>
-        <p><small>The admin username is the login name for this panel. Changing it does not
-           end your current session — sign in with the new name next time.</small></p>
+        <p><small>Use the new name next time you sign in.</small></p>
         <footer><button @click="changeUsername()" :disabled="busy.user">Change username</button></footer>
       </article>
       <article>
@@ -803,12 +763,7 @@
           <span x-show="tls.active" class="healthy-badge">https active</span>
           <span x-show="!tls.active" class="inactive-badge">no active panel TLS</span>
         </header>
-        <p>Enter the certificate (full chain) and private-key paths once.
-           When your existing issuer renews these files, the panel applies a valid,
-           matching pair automatically without restarting or disconnecting users.
-           The default <code>/root/cert/...</code> files remain group-readable after
-           renewal through the installed permission timer. Invalid or incomplete
-           replacements leave the previous certificate active.</p>
+        <p>Use matching certificate and key files.</p>
         <fieldset :disabled="busy.tls">
           <label>Public Key Path
             <input type="text" x-model="tls.cert" placeholder="/root/cert/ip/fullchain.pem">
@@ -829,18 +784,19 @@
     <!-- Version, live CPU/RAM indicators, and update controls stay together. -->
     <div class="panel-version-controls">
       <div class="resource-inline" aria-label="Live server resource usage">
-        <span>CPU</span><span class="resource-value" :style="resourceColorStyle(systemMetrics.cpu)" x-text="metricPercent(systemMetrics.cpu)"></span>
         <span>RAM</span><span class="resource-value" :style="resourceColorStyle(systemMetrics.memory)" x-text="metricPercent(systemMetrics.memory)"></span>
+        <span>CPU</span><span class="resource-value" :style="resourceColorStyle(systemMetrics.cpu)" x-text="metricPercent(systemMetrics.cpu)"></span>
       </div>
       <a class="version-badge" href="https://github.com/DonMonro/psiphon-3x-ui" target="_blank" rel="noopener">
         <!-- GitHub mark (official octocat path, simplified) -->
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
-        <span>v1.1.2</span>
+        <span>v1.2.0</span>
       </a>
       <button type="button" class="panel-update-btn" data-update-trigger
               aria-controls="update-notification" aria-expanded="false">Check for Updates</button>
-      <div data-panel-updates></div>
     </div>
+    <!-- Keep fixed overlays outside the controls' backdrop filter so they use the viewport. -->
+    <div data-panel-updates></div>
   </main>
 
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
@@ -851,6 +807,8 @@
         // Side-menu selection: which section card the content column shows.
         section: "dashboard",
         countries: [],
+        countriesLoaded: false,
+        countryStatusError: false,
         systemMetrics: {
           cpu: {available: false, unit: "cores"},
           memory: {available: false, unit: "bytes"},
@@ -875,6 +833,25 @@
             healthy: linked.filter(country => country.healthy).length,
             attention: this.attentionCountries.length,
           };
+        },
+        get panelStatus() {
+          if (!this.countriesLoaded || this.countryStatusError) {
+            return {tone: "checking", label: "Status unavailable", message: "Tunnel status is being checked or unavailable."};
+          }
+          const enabled = this.countries.filter(country => country.enabled);
+          if (!enabled.length) {
+            return {tone: "warning", label: "No tunnels enabled", message: "No country tunnels are enabled."};
+          }
+          const active = enabled.filter(country => country.unit_active).length;
+          if (!active) {
+            return {tone: "stopped", label: "Tunnels stopped", message: "All enabled country tunnels are stopped."};
+          }
+          const ready = enabled.filter(country => country.unit_active && country.assigned &&
+            country.inbound_id != null && country.healthy).length;
+          if (ready === enabled.length) {
+            return {tone: "running", label: "Running normally", message: "All enabled country routes are healthy."};
+          }
+          return {tone: "warning", label: "Needs attention", message: "Some enabled country routes need attention."};
         },
         get attentionCountries() {
           return this.countries.filter(country => country.enabled).map(country => {
@@ -1069,7 +1046,10 @@
             // accented names like Côte d'Ivoire sort sensibly).
             this.countries = (body.countries || []).slice().sort(
               (a, b) => a.name.localeCompare(b.name));
+            this.countriesLoaded = true;
+            this.countryStatusError = false;
           } catch (e) {
+            this.countryStatusError = true;
             this.notify(`failed to list countries: ${e.message}`, "err");
           } finally {
             this.busy.countries = false;

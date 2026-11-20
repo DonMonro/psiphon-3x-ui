@@ -6,6 +6,8 @@ table shapes; CRUD endpoints land in later phases.
 
 from __future__ import annotations
 
+import secrets
+
 from sqlalchemy import Boolean, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -26,6 +28,22 @@ class Settings(Base):
     public_port_range_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
     socks_port_range_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
     socks_port_range_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class AdminAuthState(Base):
+    """Revocable sessions for the singleton admin, independent of the vault key.
+
+    Keeping this in a new table lets existing installations gain revocation
+    without changing their Settings columns. Generations are random so a
+    restored database cannot recreate a later generation by incrementing it.
+    """
+
+    __tablename__ = "admin_auth_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    session_generation: Mapped[str] = mapped_column(
+        String(64), nullable=False, default=lambda: secrets.token_hex(32)
+    )
 
 
 class Wizard(Base):

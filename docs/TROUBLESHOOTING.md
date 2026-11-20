@@ -46,10 +46,59 @@ Then re-run `sudo bash /path/to/install.sh` (idempotent — it will rebuild).
   `journalctl -u psiphon-3x-ui -n 200`. If you run a host firewall or a cloud
   security group, confirm the panel port is allowed in it — the installer does
   not manage either (Phase 29).
-- **Login fails after install:** the password was shown **once** at the end
-  of the installer. If lost, re-run the installer (it's an upsert against the
-  `Settings` row — a fresh `--password` will replace the bcrypt hash) or
-  `${VENV_DIR}/bin/python -m panel.seed --port ... --user ... --password ...` directly.
+- **Forgotten username or password:** click **Can’t sign in?** on the login
+  page for the server recovery commands, or follow the steps below.
+
+### Recover a forgotten panel login
+
+Connect to the Linux server that hosts this panel using an interactive SSH
+session or the hosting provider's server console. Use a server account with
+permission to run the recovery command through `sudo`. This server access
+authorizes recovery; the old panel password is not required.
+
+To look up the existing username without changing it:
+
+```bash
+sudo psiphon-3x-ui-admin show-username
+```
+
+To set a new password and keep the existing username:
+
+```bash
+sudo psiphon-3x-ui-admin reset-password
+```
+
+To replace both credentials, replace `new-admin` with your desired username:
+
+```bash
+sudo psiphon-3x-ui-admin reset-password --username new-admin
+```
+
+Password reset asks for the new password twice with typing hidden. Passwords
+must contain at least 8 characters and fit within bcrypt's 72 UTF-8 byte limit.
+New usernames use 3–64 ASCII letters, numbers, dots, underscores, or hyphens;
+the first character must be a letter, number, dot, or underscore. There is no
+password argument or piped-input mode. Cancellation or failed validation leaves
+the account unchanged. After a successful reset, sign in through the
+normal login page. Previous browser sessions will be rejected on subsequent
+requests. Recovery changes the local panel account; the panel port, tunnel
+configuration, wizard progress, and stored upstream 3x-ui connection stay intact.
+
+The launcher locates the active panel version for the installer-managed systemd
+service, including after an in-panel update, and runs the database operation as
+the panel service account. If you customized the service's database path or
+Python environment outside the installer-managed settings, have the server
+administrator inspect the effective service configuration before recovery.
+It refuses to run during installation, update, or pending update rollback.
+If an operation is busy, wait for it to finish before trying again. If the
+panel database is missing or uninitialized, diagnose the installation first;
+recovery never creates a replacement admin account or database.
+
+If `psiphon-3x-ui-admin` is not found, run the current normal installer once
+to register the command. Older installations receiving their first in-panel
+update need this step because their existing privileged updater can install
+only its previously registered set of service/helper files. A normal reinstall
+also prompts for and reseeds the admin credentials.
 
 ### In-panel updates
 

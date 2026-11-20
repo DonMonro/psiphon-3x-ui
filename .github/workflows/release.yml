@@ -14,25 +14,23 @@ jobs:
     # GitHub supplies source archives for the tag; publish no built artifacts.
     runs-on: ubuntu-22.04
     steps:
-      - name: Create GitHub release with assets
+      - name: Publish source release
         uses: softprops/action-gh-release@v2
         with:
+          name: Psiphon-3X-UI ${{ github.ref_name }}
           body: |
             ## Psiphon-3X-UI ${{ github.ref_name }}
 
-            The update confirmation now opens as a compact pop-up above the Update button while
-            retaining the existing version, revision, progress, and confirmation actions. Dashboard
-            CPU and RAM percentages now appear above the application version.
+            - Redesigned the dashboard, sign-in page, and setup wizard with a saved light or dark theme preference.
+            - Added a dashboard tunnel health indicator and improved the layout, mobile notifications, and dark mode contrast for logs and forms.
+            - Added a **Can’t sign in?** guide and a server command for administrators to look up the username or reset credentials.
+            - Password reset, credential changes, and backup restore now revoke existing browser sessions. Sign in again after updating.
 
-            This release includes only GitHub-generated source code archives. No wheel, checksum
-            bundle, or other release assets are attached.
+            On older installations, run the normal installer once to register the recovery command. See
+            [login recovery](https://github.com/DonMonro/psiphon-3x-ui/blob/${{ github.ref_name }}/docs/TROUBLESHOOTING.md#recover-a-forgotten-panel-login)
+            and the [installation instructions](https://github.com/DonMonro/psiphon-3x-ui/blob/${{ github.ref_name }}/README.md#install).
 
-            Install on an Ubuntu server with Sanaei 3x-ui already installed:
-
-            ```bash
-            bash <(curl -sL https://raw.githubusercontent.com/DonMonro/psiphon-3x-ui/${{ github.ref_name }}/install.sh) \
-              || bash <(wget -qO- https://raw.githubusercontent.com/DonMonro/psiphon-3x-ui/${{ github.ref_name }}/install.sh)
-            ```
+            This release contains GitHub’s source ZIP and tar.gz archives for the tag.
 
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
