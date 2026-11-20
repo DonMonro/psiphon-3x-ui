@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Generator
 
 from sqlalchemy import create_engine
+from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from .config import get_settings
@@ -67,7 +68,14 @@ def init_db() -> None:
     # Import here so models register on Base before create_all runs.
     from . import models  # noqa: F401 (registers tables on Base)
 
-    Base.metadata.create_all(get_engine())
+    engine = get_engine()
+    Base.metadata.create_all(engine)
+    # An additive table also upgrades databases from before session revocation.
+    # INSERT OR IGNORE keeps every active cookie valid across ordinary boots.
+    with engine.begin() as connection:
+        connection.execute(
+            insert(models.AdminAuthState).values(id=1).on_conflict_do_nothing(index_elements=["id"])
+        )
 
 
 def get_db() -> Generator[Session, None, None]:

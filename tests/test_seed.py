@@ -104,7 +104,15 @@ def test_seed_creates_singleton_settings_row_with_bcrypt_hash(
 
 
 def test_seed_is_idempotent_and_resets_credentials(tmp_db: pathlib.Path) -> None:
+    from panel.models import AdminAuthState
+
     rc1 = _seed_run(tmp_db, port=18000, user="alice", password="hunter2")
+    engine = create_engine(f"sqlite:///{tmp_db}")
+    try:
+        with engine.connect() as connection:
+            first_generation = connection.scalar(select(AdminAuthState.session_generation))
+    finally:
+        engine.dispose()
     rc2 = _seed_run(tmp_db, port=18001, user="bob", password="hunter3")
     assert rc1 == 0 and rc2 == 0
 
@@ -118,6 +126,14 @@ def test_seed_is_idempotent_and_resets_credentials(tmp_db: pathlib.Path) -> None
 
     assert bcrypt.checkpw(b"hunter3", row["admin_pass_hash"].encode())
     assert not bcrypt.checkpw(b"hunter2", row["admin_pass_hash"].encode())
+    engine = create_engine(f"sqlite:///{tmp_db}")
+    try:
+        with engine.connect() as connection:
+            generation = connection.scalar(select(AdminAuthState.session_generation))
+            assert generation != first_generation
+            assert len(bytes.fromhex(generation)) == 32
+    finally:
+        engine.dispose()
 
 
 def test_seed_populates_country_table_from_yaml(tmp_db: pathlib.Path) -> None:

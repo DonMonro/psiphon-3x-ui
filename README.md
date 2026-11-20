@@ -126,6 +126,14 @@ prompts for and reseeds the admin credentials. In-panel updates skip that step.
 See [update troubleshooting](docs/TROUBLESHOOTING.md#in-panel-updates) for logs
 and recovery.
 
+If you forget the panel login, click **Can’t sign in?** for copyable server
+commands. Over SSH or the server console, use `sudo psiphon-3x-ui-admin show-username`
+to look up the username, `sudo psiphon-3x-ui-admin reset-password` to set a new
+password, or `sudo psiphon-3x-ui-admin reset-password --username new-admin` to
+replace both credentials. Password entry is hidden and reset revokes existing
+browser sessions. See [login recovery](docs/TROUBLESHOOTING.md#recover-a-forgotten-panel-login)
+for requirements and the one-time installer step for older deployments.
+
 ### Uninstall
 
 ```bash

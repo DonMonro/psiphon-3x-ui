@@ -360,7 +360,7 @@ class TestHttpsSettings:
 
         # Use a plain Response so we don't need a real route.
         response = Response()
-        a.set_session_cookie(response, "admin")
+        a.set_session_cookie(response, "admin", generation="a" * 64)
         set_cookie = response.headers.get("set-cookie", "")
         assert "Secure" in set_cookie
 
@@ -371,7 +371,7 @@ class TestHttpsSettings:
         from fastapi import Response
 
         response = Response()
-        a.set_session_cookie(response, "admin")
+        a.set_session_cookie(response, "admin", generation="a" * 64)
         set_cookie = response.headers.get("set-cookie", "")
         assert "Secure" not in set_cookie
 

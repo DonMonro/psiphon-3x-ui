@@ -92,6 +92,7 @@ def test_uninstall_removes_only_updater_dropin_and_fixed_workspace():
     for unit in ("download", "install", "recover"):
         assert f"psiphon-3x-ui-update-{unit}.service" in uninstall
     assert "rm -f /usr/local/libexec/psiphon-3x-ui/update_panel.py" in uninstall
+    assert "rm -f /usr/local/sbin/psiphon-3x-ui-admin" in uninstall
     assert "rm -rf /var/lib/psiphon-3x-ui-updater" in uninstall
     assert "psiphon-3x-ui.service.d/50-panel-update.conf" in uninstall
     assert "psiphon-3x-ui.service.d/*.conf" not in uninstall

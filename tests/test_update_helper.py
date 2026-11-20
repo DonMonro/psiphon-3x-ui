@@ -57,6 +57,7 @@ def host(tmp_path, monkeypatch):
         libexec=tmp_path / "libexec" / "panel",
         systemd=tmp_path / "systemd",
         polkit=tmp_path / "polkit",
+        sbin=tmp_path / "sbin",
     )
     for path in (paths.prefix, paths.libexec.parent, paths.libexec, paths.systemd, paths.polkit):
         path.mkdir(exist_ok=True, mode=0o700)
@@ -269,6 +270,33 @@ def test_success_preserves_data_and_records_verified_build(host, monkeypatch):
         assert db.execute("SELECT value FROM settings").fetchone()[0] == "old credentials"
 
 
+@pytest.mark.parametrize("failed_activation", [False, True])
+def test_updates_and_old_manifest_rollback_preserve_bootstrapped_admin_command(
+    host, monkeypatch, failed_activation
+):
+    host.files.mkdir(host.paths.sbin, 0o755)
+    launcher = host.paths.sbin / "psiphon-3x-ui-admin"
+    host.files.write(launcher, b"stable root launcher", 0o755)
+    settings = {"prefix": str(host.paths.prefix), "user": "panel", "group": "panel"}
+    host.files.put_json(host.paths.state / "admin.json", settings, 0o640)
+    stage(host)
+    prepare_fake(host, monkeypatch)
+    if failed_activation:
+
+        def health(_settings, expected):
+            if expected == helper.identity(JOB):
+                raise helper.UpdateError("candidate failed health")
+
+        monkeypatch.setattr(host.updater, "wait_health", health)
+        with pytest.raises(helper.UpdateError, match="candidate failed health"):
+            host.updater.install(JOB)
+    else:
+        host.updater.install(JOB)
+    assert launcher.read_bytes() == b"stable root launcher"
+    assert host.files.json(host.paths.state / "admin.json") == settings
+    assert not host.updater.transaction()
+
+
 def test_failed_activation_restores_database_environment_units_and_old_build(host, monkeypatch):
     stage(host)
     prepare_fake(host, monkeypatch)
@@ -374,6 +402,8 @@ def test_bootstrap_installs_current_helper_and_units_with_inherited_metadata(hos
         path = source / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes((ROOT / relative).read_bytes())
+    launcher = source / "installer/admin_recovery.py"
+    launcher.write_bytes((ROOT / "installer/admin_recovery.py").read_bytes())
     metadata = source / "build.json"
     host.files.put_json(metadata, OLD)
     host.updater.setup(source, metadata)
@@ -382,6 +412,13 @@ def test_bootstrap_installs_current_helper_and_units_with_inherited_metadata(hos
         ROOT / "installer/update_panel.py"
     ).read_bytes()
     assert host.paths.destination("install_unit").read_bytes().count(b"ExecStopPost=") == 1
+    assert (host.paths.sbin / "psiphon-3x-ui-admin").read_bytes() == launcher.read_bytes()
+    assert host.files.json(host.paths.state / "admin.json") == {
+        "prefix": str(host.paths.prefix),
+        "user": host.updater.user,
+        "group": host.updater.group,
+    }
+    assert "admin_launcher" not in helper.MANAGED
 
 
 def test_service_units_keep_lock_and_recovery_outside_panel_cgroup():

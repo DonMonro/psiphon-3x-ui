@@ -333,6 +333,7 @@ run_uninstall() {
         /etc/systemd/system/psiphon-3x-ui.service.d/50-panel-update.conf
     rmdir /etc/systemd/system/psiphon-3x-ui.service.d 2>/dev/null || true
     rm -f /usr/local/libexec/psiphon-3x-ui/update_panel.py
+    rm -f /usr/local/sbin/psiphon-3x-ui-admin
     # Fixed root-owned workspace includes staged source and candidate venvs.
     # Never remove the /run lock inode while this installer still holds it.
     rm -rf /var/lib/psiphon-3x-ui-updater
