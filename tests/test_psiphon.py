@@ -16,8 +16,12 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import subprocess
+import sys
+import tempfile
 from dataclasses import FrozenInstanceError
+from pathlib import Path
 
 import pytest
 
@@ -540,6 +544,46 @@ class TestWriteConfig:
         path = write_config("US", 11084, config_dir=tmp_path)
         data = json.loads(path.read_text(encoding="utf-8"))
         assert data["LocalSocksProxyPort"] == 11084
+
+    @pytest.mark.skipif(
+        os.name != "posix" or getattr(os, "geteuid", lambda: -1)() != 0,
+        reason="replacing a root-owned config requires root on POSIX",
+    )
+    def test_replaces_root_owned_read_only_config_as_service_user(self):
+        # Installer upgrades can leave existing configs root-owned and 0644.
+        # The panel service cannot truncate such a file, but it can publish a
+        # replacement in the setgid, group-writable config directory.
+        with tempfile.TemporaryDirectory(prefix="psiphon-config-") as temporary:
+            parent = Path(temporary)
+            parent.chmod(0o755)
+            config_dir = parent / "config"
+            config_dir.mkdir()
+            os.chown(config_dir, 0, 65534)
+            config_dir.chmod(0o2775)
+            existing = config_dir / "US.json"
+            existing.write_text("{}\n", encoding="utf-8")
+            os.chown(existing, 0, 0)
+            existing.chmod(0o644)
+
+            program = """
+import os, sys
+from pathlib import Path
+os.setgroups([])
+os.setgid(65534)
+os.setuid(65534)
+from panel.psiphon import write_config
+write_config("US", 11085, config_dir=Path(sys.argv[1]))
+"""
+            result = subprocess.run(
+                [sys.executable, "-c", program, str(config_dir)],
+                cwd=Path(__file__).resolve().parents[1],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            assert result.returncode == 0, result.stderr
+            data = json.loads(existing.read_text(encoding="utf-8"))
+            assert data["LocalSocksProxyPort"] == 11085
 
 
 # ---------------------------------------------------------------------------

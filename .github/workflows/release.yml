@@ -21,16 +21,19 @@ jobs:
           body: |
             ## Psiphon-3X-UI ${{ github.ref_name }}
 
-            - Redesigned the dashboard, sign-in page, and setup wizard with a saved light or dark theme preference.
-            - Added a dashboard tunnel health indicator and improved the layout, mobile notifications, and dark mode contrast for logs and forms.
-            - Added a **Can’t sign in?** guide and a server command for administrators to look up the username or reset credentials.
-            - Password reset, credential changes, and backup restore now revoke existing browser sessions. Sign in again after updating.
+            This patch fixes re-applying existing country tunnels when a saved config file is not writable by the panel service.
+            Configs are written to a temporary file and atomically replaced, so legacy root-owned files no longer block
+            tunnel restarts. The replacement file retains service-readable permissions, and tunnel-core cannot observe a
+            partially written JSON config. This also resolves the connection-refused symptom caused by the failed restart.
 
-            On older installations, run the normal installer once to register the recovery command. See
-            [login recovery](https://github.com/DonMonro/psiphon-3x-ui/blob/${{ github.ref_name }}/docs/TROUBLESHOOTING.md#recover-a-forgotten-panel-login)
-            and the [installation instructions](https://github.com/DonMonro/psiphon-3x-ui/blob/${{ github.ref_name }}/README.md#install).
+            The dashboard, sign-in page, setup wizard, Python package, and application metadata now consistently report v1.2.1.
 
-            This release contains GitHub’s source ZIP and tar.gz archives for the tag.
+            For installations still running an older version, repair an affected config file with `chown` and `chmod` as
+            described in the [tunnel troubleshooting guide](https://github.com/DonMonro/psiphon-3x-ui/blob/${{ github.ref_name }}/docs/TROUBLESHOOTING.md#per-country-psiphon-tunnels-psiphon-tunnelcode-service),
+            then retry **Re-apply everything**.
+
+            This release provides only GitHub-generated source ZIP and tar.gz archives for the tag; no binaries, wheels,
+            checksums, or other release assets are attached.
 
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}

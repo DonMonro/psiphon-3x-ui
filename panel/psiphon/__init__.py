@@ -28,6 +28,7 @@ import os
 import re
 import socket
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -491,10 +492,29 @@ def write_config(
     code = country_code.strip().upper()
     target_path = target_dir / f"{code}.json"
     payload = render_config(code, socks_port)
-    target_path.write_text(
-        json.dumps(payload, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    # Configs created by an older/root-run installer may be root-owned and
+    # read-only to the panel service. The config directory is intentionally
+    # group-writable, so publish a fully written replacement there instead
+    # of opening the old inode with O_TRUNC. This also prevents tunnel-core
+    # from observing a partially written JSON file during a restart.
+    content = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    fd, temporary_path = tempfile.mkstemp(prefix=f".{code}.", suffix=".tmp", dir=target_dir)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            fd = -1  # fdopen owns the descriptor now.
+            stream.write(content)
+            stream.flush()
+            if os.name == "posix":
+                # Panel and tunnel units share the service account; group-read
+                # also keeps the file accessible to the configured service group.
+                os.fchmod(stream.fileno(), 0o640)
+                os.fsync(stream.fileno())
+        os.replace(temporary_path, target_path)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(temporary_path)
     return target_path
 
 
