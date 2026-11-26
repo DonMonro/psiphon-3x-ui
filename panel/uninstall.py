@@ -69,9 +69,10 @@ import argparse
 import asyncio
 import contextlib
 import json
-import os
+import sqlite3
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 
@@ -110,9 +111,10 @@ async def _cleanup(db_path: str | None, *, dry_run: bool) -> dict[str, Any]:
     Returns a report dict: ``{"inbounds": [...], "countries": [...],
     "errors": [...], "skipped": str|None}``.
     """
+    from sqlalchemy import create_engine
     from sqlalchemy.orm import Session
 
-    from .db import get_engine, init_db
+    from .config import get_settings
     from .models import CloneRecord, Country, XuiLink
 
     report: dict[str, Any] = {
@@ -122,11 +124,16 @@ async def _cleanup(db_path: str | None, *, dry_run: bool) -> dict[str, Any]:
         "skipped": None,
     }
 
-    if db_path:
-        os.environ["PSIPHON3XUI_DB_PATH"] = db_path
-    init_db()
-
-    with Session(get_engine()) as db:
+    # Cleanup only reads the existing inventory and credentials. Initializing
+    # the schema would write admin_auth_state before any 3x-ui cleanup occurs.
+    # Explicit mode=ro also avoids SQLite's default O_CREAT open, which Linux
+    # can deny for a root process reading a service-owned DB in a sticky dir.
+    path = Path(db_path) if db_path else get_settings().db_path
+    uri = path.resolve(strict=True).as_uri() + "?mode=ro"
+    engine = create_engine("sqlite://", creator=lambda: sqlite3.connect(uri, uri=True))
+    with contextlib.ExitStack() as stack:
+        stack.callback(engine.dispose)
+        db = stack.enter_context(Session(engine))
         clones = db.query(CloneRecord).all()
         # Every country the panel could have bound routing for — a country can
         # have an outbound+rule even with no surviving CloneRecord (the inbound

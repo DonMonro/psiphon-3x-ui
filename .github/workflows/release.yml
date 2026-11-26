@@ -21,16 +21,21 @@ jobs:
           body: |
             ## Psiphon-3X-UI ${{ github.ref_name }}
 
-            This patch fixes re-applying existing country tunnels when a saved config file is not writable by the panel service.
-            Configs are written to a temporary file and atomically replaced, so legacy root-owned files no longer block
-            tunnel restarts. The replacement file retains service-readable permissions, and tunnel-core cannot observe a
-            partially written JSON config. This also resolves the connection-refused symptom caused by the failed restart.
+            This patch fixes uninstall cleanup failing with `sqlite3.OperationalError: attempt to write a readonly database`
+            before any entries could be removed from 3x-ui. Cleanup now opens the existing panel database explicitly in
+            read-only mode and no longer initializes tables or writes an admin session record. It reads the saved inventory
+            and credentials, then removes the panel-created inbounds, country outbounds, and routing rules through 3x-ui.
 
-            The dashboard, sign-in page, setup wizard, Python package, and application metadata now consistently report v1.2.1.
+            Cleanup also supports older databases without the admin session table, honors the selected database independently
+            of cached application state, handles paths containing spaces or URI-special characters, and reports a missing
+            database without creating an empty replacement. Dry-run cleanup leaves the local database unchanged.
 
-            For installations still running an older version, repair an affected config file with `chown` and `chmod` as
-            described in the [tunnel troubleshooting guide](https://github.com/DonMonro/psiphon-3x-ui/blob/${{ github.ref_name }}/docs/TROUBLESHOOTING.md#per-country-psiphon-tunnels-psiphon-tunnelcode-service),
-            then retry **Re-apply everything**.
+            The dashboard, sign-in page, setup wizard, Python package, and application metadata now consistently report v1.2.2.
+
+            Existing installations must update the installed panel code before uninstalling; downloading a newer `install.sh`
+            alone still runs the installed cleanup module. If an earlier uninstall already deleted the local database and
+            environment file, restore a backup to recover automatic cleanup or remove the remaining panel-created entries
+            manually in 3x-ui. Remove matching outbound routing rules and their outbounds together.
 
             This release provides only GitHub-generated source ZIP and tar.gz archives for the tag; no binaries, wheels,
             checksums, or other release assets are attached.

@@ -7,6 +7,7 @@ and routing rules this panel created, leaving everything else in 3x-ui intact.
 from __future__ import annotations
 
 import json
+import sqlite3
 
 import pytest
 from sqlalchemy.orm import Session
@@ -192,6 +193,103 @@ async def test_uninstall_strips_country_outbounds_and_rules(monkeypatch, tmp_pat
     # Our two rules gone, user's bittorrent rule stays.
     assert len(final["routing"]["rules"]) == 1
     assert final["routing"]["rules"][0]["protocol"] == ["bittorrent"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dry_run", [False, True])
+@pytest.mark.parametrize("legacy_schema", [False, True])
+async def test_uninstall_reads_readonly_database_without_initializing_it(
+    monkeypatch, tmp_path, dry_run, legacy_schema
+):
+    """Cleanup must not create tables or seed admin sessions before reading."""
+    _isolated_env(tmp_path, monkeypatch)
+    from panel import uninstall as uninstall_mod
+    from panel.models import AdminAuthState
+
+    _seed_country(code="US")
+    _seed_clone(country_code="US", inbound_id=42)
+    _seed_xui_link()
+    if legacy_schema:
+        # Installs predating session revocation still contain all cleanup data.
+        AdminAuthState.__table__.drop(get_engine())
+    get_engine().dispose()
+
+    db_path = tmp_path / "panel.db"
+    original_db = db_path.read_bytes()
+    connect = sqlite3.connect
+
+    def readonly_connect(*args, **kwargs):
+        connection = connect(*args, **kwargs)
+        connection.execute("PRAGMA query_only=ON")
+        return connection
+
+    monkeypatch.setattr(sqlite3, "connect", readonly_connect)
+    FakeUninstallClient.xray_template = {
+        "outbounds": [
+            {"tag": "direct", "protocol": "freedom"},
+            {"tag": "psiphon-out-US", "protocol": "socks"},
+        ],
+        "routing": {"rules": [{"outboundTag": "psiphon-out-US"}]},
+    }
+
+    report = await uninstall_mod._cleanup(str(db_path), dry_run=dry_run)
+
+    assert report["skipped"] == ("dry-run" if dry_run else None)
+    assert report["errors"] == []
+    assert report["inbounds"] == [42]
+    assert report["countries"] == ["US"]
+    if dry_run:
+        assert FakeUninstallClient.deleted_inbounds == []
+        assert FakeUninstallClient.xray_update_payload is None
+    else:
+        assert FakeUninstallClient.deleted_inbounds == [42]
+        final = json.loads(FakeUninstallClient.xray_update_payload)
+        assert final["outbounds"] == [{"tag": "direct", "protocol": "freedom"}]
+        assert final["routing"]["rules"] == []
+    assert db_path.read_bytes() == original_db
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("explicit_path", [False, True])
+async def test_uninstall_selects_database_independently_of_cached_app_engine(
+    monkeypatch, tmp_path, explicit_path
+):
+    _isolated_env(tmp_path, monkeypatch)
+    from panel import config
+    from panel import uninstall as uninstall_mod
+
+    _seed_country(code="US")
+    _seed_clone(country_code="US", inbound_id=42)
+    cached_engine = get_engine()
+    cached_engine.dispose()
+    saved_db = tmp_path / "saved panel #1 %.db"
+    saved_db.write_bytes((tmp_path / "panel.db").read_bytes())
+    _seed_clone(country_code="US", inbound_id=99)
+    if not explicit_path:
+        monkeypatch.setenv("PSIPHON3XUI_DB_PATH", str(saved_db))
+        config.get_settings.cache_clear()
+
+    report = await uninstall_mod._cleanup(str(saved_db) if explicit_path else None, dry_run=True)
+
+    assert report["skipped"] == "dry-run"
+    assert report["inbounds"] == [42]
+    assert report["countries"] == ["US"]
+    assert get_engine() is cached_engine
+    assert config.get_settings().db_path == (tmp_path / "panel.db" if explicit_path else saved_db)
+
+
+def test_uninstall_missing_database_is_reported_without_creating_it(monkeypatch, tmp_path, capsys):
+    _isolated_env(tmp_path, monkeypatch)
+    from panel import uninstall as uninstall_mod
+
+    missing_db = tmp_path / "missing.db"
+    rc = uninstall_mod.main(["--db", str(missing_db), "--strict"])
+
+    assert rc == 1
+    assert "3x-ui cleanup failed: FileNotFoundError" in capsys.readouterr().err
+    assert not missing_db.exists()
+    assert FakeUninstallClient.deleted_inbounds == []
+    assert FakeUninstallClient.xray_update_payload is None
 
 
 @pytest.mark.asyncio

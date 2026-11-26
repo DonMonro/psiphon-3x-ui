@@ -1,4 +1,4 @@
-# SHA256 manifest of Psiphon-3X-UI 1.2.0 source artifacts.
+# SHA256 manifest of Psiphon-3X-UI 1.2.2 source artifacts.
 # Verify with: sha256sum -c release-artifacts.sha256
 
 c87ec6107b707cbb560d1dc9919d695114d6a291993c346336d38e45b856f0b7  install.sh
@@ -12,7 +12,7 @@ a7851bd72d4f1298b4147be30fa21b76874b042acc41f8cec12a4300b37293cb  installer/prom
 6524691c15bfa6d1f45b26a33eab87619d077093327f380f6370a2b98e2d22f6  installer/psiphon_install.sh
 99ea954e9e4fc5b11e989caa29ff90a6b66a20e8ae1edc258dcf33e77b703d39  panel/data/countries.yaml
 cd40039633cd71b230d7e94149bd190a78c93c82184dd508da2b3afc3ec5c8f2  panel/i18n/en.json
-1626e790c386bbf601ddf02d9a2b4ee8811b52c0e637e46c1c1518ebf4ab6734  panel/static/login.html
-e2b6a9a9985170f1736108223a1e935034088f650fcc24a3200c284410bd326e  panel/static/wizard.html
+33f230902567947055bbe7215394458befe8478500ab14b311d5756ec80780d4  panel/static/login.html
+65608e7848284d6d97ec00de1ed26c8ec5d46fadf3875e71ab73d0ee7cbb34d0  panel/static/wizard.html
 d9fedca141eaa0596dd949ed60e4fcf8d85aa00c5bba226f8e73a76a16411db6  systemd/49-psiphon-3x-ui.rules
 4e545036debacc751e13f748e2eb8b4d73f7bb6e8dff9b9ada28f307d8cc9c41  systemd/psiphon-tunnel@.service
